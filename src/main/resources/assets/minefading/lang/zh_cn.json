@@ -1,0 +1,19 @@
+{
+  "item.minefading.inhaler": "吸入器",
+  "item.minefading.inhaler.desc": "通过替换药芯来改变效果。",
+  "item.minefading.shedding": "蜕皮",
+  "item.minefading.shedding.desc": "蝉回到了那个夏天。",
+  "item.minefading.disconnect": "断线",
+  "item.minefading.disconnect.desc": "舍弃过去。",
+  "item.minefading.tower": "高塔",
+  "item.minefading.tower.desc": "迎接自己的毁灭。",
+  "item.minefading.fine_sand": "细沙",
+  "item.minefading.fine_sand.desc": "没人会在意一粒凭空出现的沙子。",
+  "item.minefading.causality": "因果",
+  "item.minefading.causality.desc": "只是脖子上顶着一样的脑袋。",
+  "item.minefading.kronos": "柯罗诺斯",
+  "item.minefading.kronos.desc": "我听见的每一个字都在变得更长。",
+  "message.minefading.fine_sand_requires_named": "细沙只能用于已命名生物。",
+  "key.categories.minefading": "Minefading",
+  "key.minefading.kronos_slow": "柯罗诺斯：放缓时间"
+}
