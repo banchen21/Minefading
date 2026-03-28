@@ -4,6 +4,7 @@ import com.banchen.minefading.Config;
 import com.banchen.minefading.Minefading;
 import com.banchen.minefading.WorldRollbackManager;
 import com.banchen.minefading.day.DayStateData;
+import com.banchen.minefading.effect.ModEffects;
 import com.banchen.minefading.item.RelicAction;
 import com.google.gson.Gson;
 import com.mojang.logging.LogUtils;
@@ -12,6 +13,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.storage.LevelResource;
@@ -134,6 +136,7 @@ public class RelicRuntime
             player.displayClientMessage(Component.translatable("message.minefading.rollback_missing_snapshot"), true);
             return false;
         }
+        WorldRollbackManager.writeShedding(server);
         WorldRollbackManager.scheduleRestore(server);
         player.displayClientMessage(Component.translatable("message.minefading.rollback_scheduled"), true);
         return true;
@@ -156,9 +159,16 @@ public class RelicRuntime
 
     private static boolean activateKronos(ServerPlayer player)
     {
+        if (!kronosActiveTicks.isEmpty())
+        {
+            player.displayClientMessage(Component.translatable("message.minefading.kronos_already_active"), true);
+            return false;
+        }
+
         createCheckpoint(player, "message.minefading.kronos_saved_before_start");
         kronosActiveTicks.put(player.getUUID(), Config.kronosTicks);
         kronosNeedFinalizeSave.put(player.getUUID(), true);
+        player.addEffect(new MobEffectInstance(ModEffects.KRONOS_ACTIVE.get(), Config.kronosTicks, 0, false, true, true));
         player.displayClientMessage(Component.translatable("message.minefading.kronos_hold_key"), true);
         return true;
     }

@@ -5,6 +5,7 @@ import com.banchen.minefading.Minefading;
 import com.banchen.minefading.WorldRollbackManager;
 import com.banchen.minefading.day.DayMode;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.RenderGuiEvent;
 import net.minecraftforge.client.event.ScreenEvent;
@@ -98,14 +99,6 @@ public class ClientDayOverlay
 
     /**
      * 唯一黑幕机制：每帧 Screen 渲染完成后、Overlay 渲染前触发。
-     * 在 GameRenderer.render() 内部执行，对 overlay 的修改在同一帧立即生效。
-     * <p>
-     * 渲染管线：World → HUD → Screen → 【此处】 → Overlay → flush
-     * <p>
-     * 两层覆盖：
-     * 1. Screen 层：在此绘制纯黑覆盖 ReceivingLevelScreen 等任何 Screen
-     * 2. Overlay 层：包装原版 LevelLoadingScreen（使其 render() 正常运行以推进加载，
-     *    但画面被 BlackTransitionOverlay 用纯黑覆盖）
      */
     @SubscribeEvent
     public static void onScreenRenderPost(ScreenEvent.Render.Post event)
@@ -130,6 +123,16 @@ public class ClientDayOverlay
         else if (!(overlay instanceof BlackTransitionOverlay))
         {
             mc.setOverlay(new BlackTransitionOverlay(overlay));
+        }
+    }
+
+    // 打开世界选择列表时，清理已被删除世界的孤立快照
+    @SubscribeEvent
+    public static void onScreenOpening(ScreenEvent.Opening event)
+    {
+        if (event.getNewScreen() instanceof SelectWorldScreen)
+        {
+            WorldRollbackManager.cleanOrphanedSnapshots();
         }
     }
 }

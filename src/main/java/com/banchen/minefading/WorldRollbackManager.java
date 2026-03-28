@@ -1,9 +1,13 @@
 package com.banchen.minefading;
 
 import com.banchen.minefading.client.BlackTransitionScreen;
+import com.banchen.minefading.item.RelicItems;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.storage.LevelResource;
 import org.slf4j.Logger;
 
@@ -36,6 +40,10 @@ public class WorldRollbackManager
     private static volatile boolean reloadStarted = false;
     // 玩家就绪后 screen 连续为 null 的 tick 数（满足阈值才真正退出 PENDING_RELOAD）
     private static volatile int playerReadyTicks = 0;
+    // 蜕皮标记文件名（放在 minefading_snapshots/ 目录下，不在快照子目录内，不会被还原覆盖）
+    private static final String SHEDDING_PENDING_FILE = "shedding_pending";
+    // 是否已在 PENDING_RELOAD 期间提交了蜕皮扣除（避免重复提交）
+    private static volatile boolean sheddingDeductScheduled = false;
 
     // 是否已有可用快照
     public static boolean hasSnapshot()
@@ -234,6 +242,7 @@ public class WorldRollbackManager
                     LOGGER.info("[Minefading] 正在重载世界：{}", pendingLevelId);
                     skipNextEntryCheckLevelId = pendingLevelId;
                     playerReadyTicks = 0;
+                    sheddingDeductScheduled = false;
                     minecraft.createWorldOpenFlows().loadLevel(new BlackTransitionScreen(), pendingLevelId);
                     reloadStarted = true;
                 }
@@ -249,6 +258,17 @@ public class WorldRollbackManager
                     playerReadyTicks = 0;
                 }
 
+                // 玩家刚就绪（黑屏仍在显示），立即在服务端线程扣除蜕皮
+                if (playerReadyTicks == 1 && !sheddingDeductScheduled)
+                {
+                    sheddingDeductScheduled = true;
+                    MinecraftServer srv = minecraft.getSingleplayerServer();
+                    if (srv != null)
+                    {
+                        srv.execute(() -> deductSheddingFromMarker(srv));
+                    }
+                }
+
                 if (playerReadyTicks >= 5)
                 {
                     // 清除黑幕 Overlay 并结束回档
@@ -259,6 +279,12 @@ public class WorldRollbackManager
                     pendingLevelId = null;
                     reloadStarted = false;
                     playerReadyTicks = 0;
+                    sheddingDeductScheduled = false;
+                    // entrySnapshotChecked 在回档期间保持 true（isRestoring 阻止了重置），
+                    // 已足以防止本次重载时再次触发入口检查，无需保留 skipNextEntryCheckLevelId。
+                    // 若不清除，该标记会残留到下次退出重进时才被 consumeSkipAutoEntryCheck 消耗，
+                    // 导致该次重进跳过快照检查、不执行回档。
+                    skipNextEntryCheckLevelId = null;
                 }
             }
             default -> { /* IDLE：无需处理 */ }
@@ -316,5 +342,119 @@ public class WorldRollbackManager
                 return FileVisitResult.CONTINUE;
             }
         });
+    }
+
+    // ── 蜕皮使用记录（标记文件放在 minefading_snapshots/ 目录下，不会被快照还原覆盖） ──
+
+    /**
+     * 蜕皮使用时调用：写入标记文件到 minefading_snapshots/shedding_pending
+     */
+    public static void writeShedding(MinecraftServer server)
+    {
+        Path marker = getSheddingMarkerPath(server);
+        try
+        {
+            Files.createDirectories(marker.getParent());
+            Files.writeString(marker, "1");
+            LOGGER.info("[Minefading] 已写入蜕皮使用标记：{}", marker);
+        }
+        catch (IOException e)
+        {
+            LOGGER.error("[Minefading] 写入蜕皮标记失败", e);
+        }
+    }
+
+    /**
+     * 在黑屏期间扣除蜕皮：读取标记文件，扣除 1 个蜕皮，然后删除标记。
+     * 由 PENDING_RELOAD 在 playerReadyTicks==1 时通过 server.execute() 调度到服务端线程执行。
+     */
+    private static void deductSheddingFromMarker(MinecraftServer server)
+    {
+        // 读取并删除标记文件
+        Path marker = getSheddingMarkerPath(server);
+        if (!Files.exists(marker))
+            return;
+
+        try
+        {
+            Files.deleteIfExists(marker);
+            LOGGER.info("[Minefading] 已清除蜕皮使用标记");
+        }
+        catch (IOException e)
+        {
+            LOGGER.error("[Minefading] 清除蜕皮标记失败", e);
+        }
+
+        // 扣除第一个玩家背包中的 1 个蜕皮（单人模式只有一个玩家）
+        Item sheddingItem = RelicItems.SHEDDING.get();
+        for (ServerPlayer player : server.getPlayerList().getPlayers())
+        {
+            for (int i = 0; i < player.getInventory().getContainerSize(); i++)
+            {
+                ItemStack stack = player.getInventory().getItem(i);
+                if (stack.is(sheddingItem))
+                {
+                    stack.shrink(1);
+                    if (stack.isEmpty())
+                    {
+                        player.getInventory().setItem(i, ItemStack.EMPTY);
+                    }
+                    player.inventoryMenu.broadcastChanges();
+                    LOGGER.info("[Minefading] 已从玩家 {} 背包扣除 1 个蜕皮", player.getName().getString());
+                    return;
+                }
+            }
+        }
+        LOGGER.warn("[Minefading] 回档完成但未在任何玩家背包中找到蜕皮物品");
+    }
+
+    private static Path getSheddingMarkerPath(MinecraftServer server)
+    {
+        Path worldRoot = server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
+        Path snapshotsDir = getBackupRoot(worldRoot).getParent();
+        return snapshotsDir.resolve(SHEDDING_PENDING_FILE);
+    }
+
+    /**
+     * 清理孤立快照：删除 minefading_snapshots/ 下所有在 saves/ 中已不存在的世界快照。
+     * 在客户端打开世界选择列表时调用（纯客户端操作，不需要 MinecraftServer）。
+     */
+    public static void cleanOrphanedSnapshots()
+    {
+        Path gameDir = Minecraft.getInstance().gameDirectory.toPath();
+        Path snapshotsDir = gameDir.resolve("minefading_snapshots");
+        Path savesDir = gameDir.resolve("saves");
+
+        if (!Files.isDirectory(snapshotsDir))
+            return;
+
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(snapshotsDir))
+        {
+            for (Path snapshotEntry : stream)
+            {
+                if (!Files.isDirectory(snapshotEntry))
+                    continue;
+
+                String levelId = snapshotEntry.getFileName().toString();
+                Path worldDir = savesDir.resolve(levelId);
+
+                if (!Files.isDirectory(worldDir))
+                {
+                    try
+                    {
+                        deleteDirectory(snapshotEntry);
+                        LOGGER.info("[Minefading] 已清理孤立快照：{}", snapshotEntry);
+                    }
+                    catch (IOException e)
+                    {
+                        LOGGER.error("[Minefading] 清理孤立快照失败：{}", snapshotEntry, e);
+                    }
+                }
+            }
+        }
+        catch (IOException e)
+        {
+            LOGGER.error("[Minefading] 扫描快照目录失败", e);
+        }
     }
 }

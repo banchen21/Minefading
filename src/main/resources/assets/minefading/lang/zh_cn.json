@@ -34,9 +34,11 @@
   "message.minefading.kronos_saved_after_end": "柯罗诺斯效果结束，已再次存档。",
   "message.minefading.causality_activated": "因果已激活。",
   "message.minefading.kronos_saved_before_start": "柯罗诺斯激活，已先存档。",
-  "message.minefading.kronos_hold_key": "按住快捷键可放缓时间。",
+  "message.minefading.kronos_already_active": "已有一个柯罗诺斯正在生效，不能重复使用。",
+  "message.minefading.kronos_hold_key": "按住快捷键Z可放缓时间。",
   "message.minefading.countdown_zero": "倒计时已归零。",
   "message.minefading.spectator_locked": "你已进入旁观者模式，无法切换回其他模式。",
+  "effect.minefading.kronos_active": "柯罗诺斯",
   "key.categories.minefading": "Minefading",
   "key.minefading.kronos_slow": "柯罗诺斯：放缓时间",
   "itemGroup.minefading": "Minefading"
