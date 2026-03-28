@@ -1,6 +1,6 @@
 package com.banchen.minefading.item;
 
-// 遗物物品的行为枚举，每种遗物对应一个唯一的行为类型
+// 药芯物品的行为枚举，每种药芯对应一个唯一的行为类型
 public enum RelicAction
 {
     INHALER,   // 吸入器：装填提示

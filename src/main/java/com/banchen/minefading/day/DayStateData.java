@@ -1,6 +1,7 @@
 package com.banchen.minefading.day;
 
 import com.banchen.minefading.Minefading;
+import com.banchen.minefading.relic.TrackedEntityManager;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtUtils;
@@ -10,10 +11,13 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.saveddata.SavedData;
 
+import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -21,7 +25,7 @@ import java.util.Set;
 import java.util.UUID;
 
 // 天数状态的持久化数据，存储于世界 data 目录中
-// 管理显示天数偏移、存档点、被追踪实体列表及其位置快照
+// 管理显示天数偏移、存档点、被追踪实体列表及其位置快照及其NBT
 public class DayStateData extends SavedData
 {
     private static final String DATA_NAME = Minefading.MODID + "_day_state";
@@ -38,6 +42,10 @@ public class DayStateData extends SavedData
     private final Set<UUID> trackedEntityIds = new HashSet<>();
     // 存档点时各追踪实体的位置快照
     private final Map<UUID, Snapshot> trackedSnapshots = new HashMap<>();
+    // 追踪实体的NBT数据管理器
+    private final TrackedEntityManager entityManager = new TrackedEntityManager();
+    // 是否已初始化entityManager（从文件加载）
+    private boolean entityManagerInitialized = false;
 
     // 从世界数据存储中获取或创建 DayStateData 实例（单例模式）
     public static DayStateData get(MinecraftServer server)
@@ -141,8 +149,26 @@ public class DayStateData extends SavedData
     // 完整回档：回退天数 + 将追踪实体传送回快照位置
     public void rollbackToCheckpoint(MinecraftServer server, int worldDay)
     {
+        ensureEntityManagerInitialized(server);
         setDisplayedDay(worldDay, rollbackDisplayDay);
         restoreTrackedEntities(server);
+    }
+
+    // 确保entityManager已从文件加载（延迟初始化）
+    private void ensureEntityManagerInitialized(MinecraftServer server)
+    {
+        if (entityManagerInitialized)
+            return;
+
+        try
+        {
+            entityManager.loadFromFile(server);
+        }
+        catch (IOException e)
+        {
+            // 日志已在 TrackedEntityManager 中输出
+        }
+        entityManagerInitialized = true;
     }
 
     // 保存存档点：更新天数快照 + 记录追踪实体当前位置
@@ -154,14 +180,31 @@ public class DayStateData extends SavedData
         setDirty();
     }
 
-    // 将实体 UUID 加入追踪列表
+    // 将实体 UUID 加入追踪列表，并保存其完整 NBT 数据到文件
+    public void trackEntity(UUID entityId, Entity entity, MinecraftServer server)
+    {
+        try
+        {
+            trackedEntityIds.add(entityId);
+            entityManager.cacheEntity(entityId, entity);
+            entityManager.flushToFile(server);
+            setDirty();
+        }
+        catch (Exception e)
+        {
+            trackedEntityIds.remove(entityId);
+            com.mojang.logging.LogUtils.getLogger().error("[Minefading] 追踪实体 {} 失败", entityId, e);
+        }
+    }
+
+    // 已废弃的单参版本，保留向后兼容
     public void trackEntity(UUID entityId)
     {
         trackedEntityIds.add(entityId);
         setDirty();
     }
 
-    // 记录所有追踪实体的当前坐标和维度
+    // 记录所有追踪实体的当前坐标、维度及完整 NBT 数据
     private void snapshotTrackedEntities(MinecraftServer server)
     {
         trackedSnapshots.clear();
@@ -171,29 +214,79 @@ public class DayStateData extends SavedData
             if (entity == null)
                 continue;
 
+            // 保存位置快照（备用传送方案）
             trackedSnapshots.put(id, new Snapshot(entity.level().dimension(), entity.getX(), entity.getY(), entity.getZ()));
+
+            // 更新实体NBT缓存
+            entityManager.cacheEntity(id, entity);
+        }
+
+        // 持久化到文件
+        try
+        {
+            entityManager.flushToFile(server);
+        }
+        catch (IOException e)
+        {
+            // 日志已在 TrackedEntityManager 中输出
         }
     }
 
-    // 将所有追踪实体传送回快照记录的位置（跨维度也处理）
+    // 回档所有追踪实体：在玩家身边从 NBT 重建，成功后删除该条细沙记录（一次性）
     private void restoreTrackedEntities(MinecraftServer server)
     {
-        for (Map.Entry<UUID, Snapshot> entry : trackedSnapshots.entrySet())
+        ServerPlayer anchorPlayer = server.getPlayerList().getPlayers().stream().findFirst().orElse(null);
+        if (anchorPlayer == null)
+            return;
+
+        ArrayList<UUID> consumedIds = new ArrayList<>();
+
+        for (UUID entityId : trackedEntityIds.toArray(UUID[]::new))
         {
-            Entity entity = findEntity(server, entry.getKey());
-            if (entity == null)
+            // 删除当前世界中同 UUID 的旧实体，避免冲突
+            Entity oldEntity = findEntity(server, entityId);
+            if (oldEntity != null)
+                oldEntity.discard();
+
+            // 从 NBT 重建实体
+            Entity restoredEntity = entityManager.restoreEntity(server, entityId);
+            if (restoredEntity == null)
                 continue;
 
-            Snapshot snapshot = entry.getValue();
-            ServerLevel targetLevel = server.getLevel(snapshot.dimension);
-            if (targetLevel == null)
-                continue;
+            // 统一召回到玩家身边
+            ServerLevel targetLevel = anchorPlayer.serverLevel();
+            Entity summonEntity = restoredEntity;
+            if (restoredEntity.level() != targetLevel)
+            {
+                Entity changed = restoredEntity.changeDimension(targetLevel);
+                if (changed != null)
+                    summonEntity = changed;
+            }
 
-            if (entity.level().dimension() != snapshot.dimension)
-                entity.changeDimension(targetLevel);
-
-            entity.teleportTo(snapshot.x, snapshot.y, snapshot.z);
+            summonEntity.teleportTo(anchorPlayer.getX() + 1.0D, anchorPlayer.getY(), anchorPlayer.getZ());
+            consumedIds.add(entityId);
         }
+
+        if (consumedIds.isEmpty())
+            return;
+
+        for (UUID consumedId : consumedIds)
+        {
+            trackedEntityIds.remove(consumedId);
+            trackedSnapshots.remove(consumedId);
+            entityManager.removeEntity(consumedId);
+        }
+
+        try
+        {
+            entityManager.flushToFile(server);
+        }
+        catch (IOException e)
+        {
+            // 日志已在 TrackedEntityManager 中输出
+        }
+
+        setDirty();
     }
 
     private Entity findEntity(MinecraftServer server, UUID id)

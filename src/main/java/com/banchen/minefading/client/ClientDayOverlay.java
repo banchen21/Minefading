@@ -1,10 +1,13 @@
 package com.banchen.minefading.client;
 
+import com.banchen.minefading.Config;
 import com.banchen.minefading.Minefading;
+import com.banchen.minefading.WorldRollbackManager;
 import com.banchen.minefading.day.DayMode;
 import net.minecraft.client.Minecraft;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.RenderGuiEvent;
+import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
@@ -60,6 +63,9 @@ public class ClientDayOverlay
     @SubscribeEvent
     public static void onRenderGui(RenderGuiEvent.Post event)
     {
+        if (WorldRollbackManager.isRestoring())
+            return;
+
         Minecraft minecraft = Minecraft.getInstance();
         int width = minecraft.getWindow().getGuiScaledWidth();
         int height = minecraft.getWindow().getGuiScaledHeight();
@@ -69,7 +75,15 @@ public class ClientDayOverlay
         {
             int alpha = Math.min(200, 60 + overlayTicksLeft * 2);
             event.getGuiGraphics().fill(0, 0, width, height, alpha << 24);
-            event.getGuiGraphics().drawCenteredString(minecraft.font, overlayMessage, width / 2, height / 2 - 4, 0xFFFFFF);
+
+            // 放大中间提示文字，提升可读性
+            float overlayTextScale = Config.overlayTextScale;
+            event.getGuiGraphics().pose().pushPose();
+            event.getGuiGraphics().pose().scale(overlayTextScale, overlayTextScale, 1.0F);
+            int scaledCenterX = Math.round((width / 2.0F) / overlayTextScale);
+            int scaledY = Math.round((height / 2.0F - 8.0F) / overlayTextScale);
+            event.getGuiGraphics().drawCenteredString(minecraft.font, overlayMessage, scaledCenterX, scaledY, 0xFFFFFF);
+            event.getGuiGraphics().pose().popPose();
         }
 
         // 持久 HUD：显示在血条上方（血条约在底部 39px 处）
@@ -79,6 +93,43 @@ public class ClientDayOverlay
             int x = width / 2 - 91;
             int y = height - 52;
             event.getGuiGraphics().drawString(minecraft.font, hudText, x, y, 0xFFFFFF, false);
+        }
+    }
+
+    /**
+     * 唯一黑幕机制：每帧 Screen 渲染完成后、Overlay 渲染前触发。
+     * 在 GameRenderer.render() 内部执行，对 overlay 的修改在同一帧立即生效。
+     * <p>
+     * 渲染管线：World → HUD → Screen → 【此处】 → Overlay → flush
+     * <p>
+     * 两层覆盖：
+     * 1. Screen 层：在此绘制纯黑覆盖 ReceivingLevelScreen 等任何 Screen
+     * 2. Overlay 层：包装原版 LevelLoadingScreen（使其 render() 正常运行以推进加载，
+     *    但画面被 BlackTransitionOverlay 用纯黑覆盖）
+     */
+    @SubscribeEvent
+    public static void onScreenRenderPost(ScreenEvent.Render.Post event)
+    {
+        if (!WorldRollbackManager.isRestoring())
+            return;
+
+        Minecraft mc = Minecraft.getInstance();
+
+        // 在 Screen 层绘制纯黑
+        event.getGuiGraphics().fill(0, 0,
+                mc.getWindow().getGuiScaledWidth(),
+                mc.getWindow().getGuiScaledHeight(), 0xFF000000);
+
+        // 确保 Overlay 也是黑幕（包装原版 LevelLoadingScreen 使其 render() 仍运行、
+        // 进度检测和 onFinish 回调正常触发，但画面被黑色覆盖）
+        net.minecraft.client.gui.screens.Overlay overlay = mc.getOverlay();
+        if (overlay == null)
+        {
+            mc.setOverlay(new BlackTransitionOverlay());
+        }
+        else if (!(overlay instanceof BlackTransitionOverlay))
+        {
+            mc.setOverlay(new BlackTransitionOverlay(overlay));
         }
     }
 }

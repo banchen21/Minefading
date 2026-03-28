@@ -17,7 +17,7 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
 // 客户端 tick 驱动的天数系统事件处理器
-// 单人模式下通过 getSingleplayerServer() 访问集成服务端，处理天数变化、死亡回档和倒计时归零
+// 单人模式下通过 getSingleplayerServer() 访问集成客户端，处理天数变化、死亡回档和倒计时归零
 @Mod.EventBusSubscriber(modid = Minefading.MODID, value = Dist.CLIENT)
 public class DaySystemEvents
 {
@@ -135,9 +135,17 @@ public class DaySystemEvents
         // 倒计时归零：强制杀死玩家（极限模式死亡）
         if (Config.mode == DayMode.COUNTDOWN && remainingDays <= 0 && !player.isDeadOrDying())
         {
-            player.displayClientMessage(net.minecraft.network.chat.Component.literal("倒计时已归零。"), true);
+            player.displayClientMessage(net.minecraft.network.chat.Component.translatable("message.minefading.countdown_zero"), true);
             if (server.getPlayerList().getPlayer(player.getUUID()) != null)
-                server.execute(() -> server.getPlayerList().getPlayer(player.getUUID()).kill());
+                server.execute(() ->
+                {
+                    net.minecraft.server.level.ServerPlayer serverPlayer = server.getPlayerList().getPlayer(player.getUUID());
+                    if (serverPlayer == null)
+                        return;
+                    WorldRollbackManager.deleteSnapshot(server);
+                    com.banchen.minefading.relic.RelicRuntime.markForSpectatorLock(serverPlayer.getUUID());
+                    serverPlayer.kill();
+                });
             deathHandled = true;
             return;
         }

@@ -1,10 +1,9 @@
 package com.banchen.minefading;
 
 import com.banchen.minefading.item.RelicItems;
+import com.banchen.minefading.item.ModCreativeTabs;
 import com.mojang.logging.LogUtils;
-import net.minecraft.world.item.CreativeModeTabs;
 import net.minecraftforge.common.MinecraftForge;
-import net.minecraftforge.event.BuildCreativeModeTabContentsEvent;
 import net.minecraftforge.event.server.ServerStartingEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -29,10 +28,10 @@ public class Minefading
         IEventBus modEventBus = context.getModEventBus();
 
         modEventBus.addListener(this::commonSetup);
-        modEventBus.addListener(this::addCreative); // 注入创造模式物品栏
         MinecraftForge.EVENT_BUS.register(this);
         context.registerConfig(ModConfig.Type.COMMON, Config.SPEC); // 注册配置文件
-        RelicItems.ITEMS.register(modEventBus); // 注册所有遗物物品
+        RelicItems.ITEMS.register(modEventBus); // 注册所有药芯物品
+        ModCreativeTabs.CREATIVE_MODE_TABS.register(modEventBus); // 注册自定义创造模式标签页
     }
 
     private void commonSetup(final FMLCommonSetupEvent event)
@@ -45,21 +44,6 @@ public class Minefading
     public void onServerStarting(ServerStartingEvent event)
     {
         LOGGER.info("Minefading server starting.");
-    }
-
-    // 将所有遗物物品注入"材料"和"搜索"两个创造模式标签页
-    private void addCreative(BuildCreativeModeTabContentsEvent event)
-    {
-        if (event.getTabKey() != CreativeModeTabs.INGREDIENTS && event.getTabKey() != CreativeModeTabs.SEARCH)
-            return;
-
-        event.accept(RelicItems.INHALER);    // 吸入器
-        event.accept(RelicItems.SHEDDING);   // 蜕皮
-        event.accept(RelicItems.DISCONNECT); // 断线
-        event.accept(RelicItems.TOWER);      // 高塔
-        event.accept(RelicItems.FINE_SAND);  // 细沙
-        event.accept(RelicItems.CAUSALITY);  // 因果
-        event.accept(RelicItems.KRONOS);     // 柯罗诺斯
     }
 
     @Mod.EventBusSubscriber(modid = MODID, bus = Mod.EventBusSubscriber.Bus.MOD)

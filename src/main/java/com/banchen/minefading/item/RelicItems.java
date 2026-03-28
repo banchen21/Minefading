@@ -6,13 +6,13 @@ import net.minecraftforge.registries.DeferredRegister;
 import net.minecraftforge.registries.ForgeRegistries;
 import net.minecraftforge.registries.RegistryObject;
 
-// 所有遗物物品的注册表，统一管理 7 件遗物
+// 所有药芯物品的注册表，统一管理 7 件药芯
 public class RelicItems
 {
     public static final DeferredRegister<Item> ITEMS = DeferredRegister.create(ForgeRegistries.ITEMS, Minefading.MODID);
 
     public static final RegistryObject<Item> INHALER   = ITEMS.register("inhaler",
-            () -> new RelicItem(RelicAction.INHALER,   "item.minefading.inhaler.desc"));
+            InhalerItem::new);
     public static final RegistryObject<Item> SHEDDING  = ITEMS.register("shedding",
             () -> new RelicItem(RelicAction.SHEDDING,  "item.minefading.shedding.desc"));
     public static final RegistryObject<Item> DISCONNECT = ITEMS.register("disconnect",

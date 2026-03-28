@@ -33,6 +33,12 @@ public class FineSandItem extends Item
         if (!(player instanceof ServerPlayer serverPlayer))
             return InteractionResult.PASS;
 
+        if (usedHand != InteractionHand.OFF_HAND || player.getMainHandItem().getItem() != RelicItems.INHALER.get())
+        {
+            serverPlayer.displayClientMessage(Component.translatable("message.minefading.use_fine_sand_with_inhaler"), true);
+            return InteractionResult.PASS;
+        }
+
         // 只允许追踪有命名的生物（用于叙事目标角色）
         if (!interactionTarget.hasCustomName())
         {
@@ -41,12 +47,15 @@ public class FineSandItem extends Item
         }
 
         RelicRuntime.trackEntity(serverPlayer, interactionTarget);
+        player.getMainHandItem().hurtAndBreak(1, serverPlayer, brokenPlayer -> brokenPlayer.broadcastBreakEvent(InteractionHand.MAIN_HAND));
+        stack.shrink(1);
         return InteractionResult.CONSUME;
     }
 
     @Override
     public void appendHoverText(ItemStack stack, @Nullable Level level, List<Component> tooltip, TooltipFlag flag)
     {
+        tooltip.add(Component.translatable("item.minefading.fine_sand.func").withStyle(ChatFormatting.WHITE));
         tooltip.add(Component.translatable("item.minefading.fine_sand.desc").withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC));
     }
 }
