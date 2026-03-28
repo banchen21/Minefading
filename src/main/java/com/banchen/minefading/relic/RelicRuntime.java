@@ -1,5 +1,6 @@
 package com.banchen.minefading.relic;
 
+import com.banchen.minefading.WorldRollbackManager;
 import com.banchen.minefading.day.DayStateData;
 import com.banchen.minefading.item.RelicAction;
 import net.minecraft.network.chat.Component;
@@ -39,24 +40,21 @@ public class RelicRuntime
         {
             case INHALER -> player.displayClientMessage(Component.literal("吸入器已装填。"), true);
             case SHEDDING -> rollback(player);
-            case DISCONNECT -> createCheckpoint(player, "已存档。", true);
+            case DISCONNECT -> createCheckpoint(player, "已存档。");
             case TOWER -> killPlayer(player, Component.literal("你选择了高塔。"));
             case CAUSALITY -> activateCausality(player);
             case CHRONOS -> activateKronos(player);
         }
     }
 
-    // 细沙：将目标实体加入追踪，并立即保存存档点
+    // 细沙：将目标实体加入追踪，并立即保存整个世界快照
     public static void trackEntity(ServerPlayer player, LivingEntity entity)
     {
         MinecraftServer server = player.server;
-        ServerLevel overworld = server.overworld();
         DayStateData data = DayStateData.get(server);
-        int worldDay = (int) (overworld.getDayTime() / 24000L) + 1;
 
-        data.trackEntity(entity.getUUID());
-        data.saveCheckpoint(server, worldDay);
-        server.saveEverything(true, false, true);
+        data.trackEntity(entity.getUUID()); // 在 DayStateData 中记录追踪 UUID
+        WorldRollbackManager.takeSnapshot(server); // 保存整个世界快照（含追踪实体信息）
         player.displayClientMessage(Component.literal("细沙记录完成，目标会在回溯时被带回。"), true);
     }
 
@@ -83,7 +81,7 @@ public class RelicRuntime
             {
                 ServerPlayer player = server.getPlayerList().getPlayer(playerId);
                 if (player != null)
-                    createCheckpoint(player, "柯罗诺斯效果结束，已再次存档。", true);
+                    createCheckpoint(player, "柯罗诺斯效果结束，已再次存档。");
                 kronosNeedFinalizeSave.remove(playerId);
             }
         }
@@ -115,27 +113,23 @@ public class RelicRuntime
         slowTimeKeyDown = keyDown;
     }
 
-    // 蜕皮：回到上一个存档点的天数
+    // 蜕皮：触发全世界回档（调度器将在客户端 tick 执行断线→还原→重载）
     private static void rollback(ServerPlayer player)
     {
         MinecraftServer server = player.server;
-        ServerLevel overworld = server.overworld();
-        DayStateData data = DayStateData.get(server);
-        int worldDay = (int) (overworld.getDayTime() / 24000L) + 1;
-        data.rollbackToCheckpoint(server, worldDay);
-        player.displayClientMessage(Component.literal("已回到上一个存档点。"), true);
+        if (!WorldRollbackManager.hasSnapshot(server))
+        {
+            player.displayClientMessage(Component.literal("尚无可用快照，无法蜕皮。"), true);
+            return;
+        }
+        WorldRollbackManager.scheduleRestore(server);
+        player.displayClientMessage(Component.literal("蜕皮激活，世界将回溯……"), true);
     }
 
-    // 断线/柯罗诺斯：创建存档点，可选是否立即写入磁盘
-    private static void createCheckpoint(ServerPlayer player, String message, boolean forceDiskSave)
+    // 断线/柯罗诺斯：创建全世界快照作为存档点
+    private static void createCheckpoint(ServerPlayer player, String message)
     {
-        MinecraftServer server = player.server;
-        ServerLevel overworld = server.overworld();
-        DayStateData data = DayStateData.get(server);
-        int worldDay = (int) (overworld.getDayTime() / 24000L) + 1;
-        data.saveCheckpoint(server, worldDay);
-        if (forceDiskSave)
-            server.saveEverything(true, false, true);
+        WorldRollbackManager.takeSnapshot(player.server); // 保存整个世界（含玩家状态）
         player.displayClientMessage(Component.literal(message), true);
     }
 
@@ -147,7 +141,7 @@ public class RelicRuntime
 
     private static void activateKronos(ServerPlayer player)
     {
-        createCheckpoint(player, "柯罗诺斯激活，已先存档。", true);
+        createCheckpoint(player, "柯罗诺斯激活，已先存档。");
         kronosActiveTicks.put(player.getUUID(), KRONOS_TICKS);
         kronosNeedFinalizeSave.put(player.getUUID(), true);
         player.displayClientMessage(Component.literal("按住快捷键可放缓时间。"), true);

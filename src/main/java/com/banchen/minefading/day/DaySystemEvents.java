@@ -2,6 +2,7 @@ package com.banchen.minefading.day;
 
 import com.banchen.minefading.Config;
 import com.banchen.minefading.Minefading;
+import com.banchen.minefading.WorldRollbackManager;
 import com.banchen.minefading.client.ClientDayOverlay;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
@@ -9,6 +10,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.storage.LevelResource;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -23,6 +25,10 @@ public class DaySystemEvents
     private static boolean deathHandled;
     // 上次公告的显示天数，用于检测是否需要刷新覆盖层
     private static int lastAnnouncedDay = -1;
+    // 进入世界后是否已执行过“自动快照检查”（有快照则回档，无快照则建档）
+    private static boolean entrySnapshotChecked;
+    // 本次已检查的世界 ID，用于跨世界切换时重新检查
+    private static String checkedLevelId;
 
     // 将游戏时间转换为第几天（从第 1 天开始）
     private static int getWorldDay(ServerLevel level)
@@ -55,6 +61,14 @@ public class DaySystemEvents
             return;
 
         Minecraft minecraft = Minecraft.getInstance();
+
+        // 优先推进回档状态机（即使 player/server 为 null 也需要继续处理）
+        WorldRollbackManager.onClientTick(minecraft);
+
+        // 回档进行中时跳过所有常规逻辑
+        if (WorldRollbackManager.isRestoring())
+            return;
+
         LocalPlayer player = minecraft.player;
         MinecraftServer server = minecraft.getSingleplayerServer();
         // 非单人游戏或尚未进入世界时跳过
@@ -62,6 +76,8 @@ public class DaySystemEvents
         {
             deathHandled = false;
             lastAnnouncedDay = -1;
+            entrySnapshotChecked = false;
+            checkedLevelId = null;
             ClientDayOverlay.clearHud(); // 退出游戏时清除 HUD
             return;
         }
@@ -74,15 +90,40 @@ public class DaySystemEvents
         if (overworld.dimension() != Level.OVERWORLD)
             return;
 
+        // 进入世界时先检查快照：有则回档，无则立即创建首个快照
+        String levelId = server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize().getFileName().toString();
+        if (!levelId.equals(checkedLevelId))
+        {
+            checkedLevelId = levelId;
+            entrySnapshotChecked = false;
+        }
+        if (!entrySnapshotChecked)
+        {
+            entrySnapshotChecked = true;
+            if (!WorldRollbackManager.consumeSkipAutoEntryCheck(server))
+            {
+                if (WorldRollbackManager.hasSnapshot(server))
+                {
+                    WorldRollbackManager.scheduleRestore(server);
+                    deathHandled = true;
+                    return;
+                }
+                else
+                {
+                    WorldRollbackManager.takeSnapshot(server);
+                }
+            }
+        }
+
         DayStateData data = DayStateData.get(server);
         int worldDay = getWorldDay(overworld);
         boolean dayChanged = data.updateForWorldDay(worldDay);
         int displayedDay = data.getDisplayedDay(worldDay);
         int remainingDays = Math.max(0, Config.countdownDays - displayedDay + 1);
 
-        // 新的一天到来时自动保存存档点
+        // 新的一天到来时自动保存全世界快照
         if (dayChanged)
-            data.saveCheckpoint(server, worldDay);
+            WorldRollbackManager.takeSnapshot(server);
 
         // 天数有变化或刚进入游戏时触发覆盖层
         if (dayChanged || displayedDay != lastAnnouncedDay)
@@ -101,11 +142,10 @@ public class DaySystemEvents
             return;
         }
 
-        // 玩家死亡时回档到上一个安全存档点
+        // 玩家死亡时触发全世界回档
         if (player.isDeadOrDying() && !deathHandled)
         {
-            data.rollbackToCheckpoint(server, worldDay);
-            announceCurrentDay(server); // 回档后立即刷新天数显示
+            WorldRollbackManager.scheduleRestore(server);
             deathHandled = true;
         }
         else if (!player.isDeadOrDying())
