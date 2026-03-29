@@ -11,9 +11,21 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.storage.LevelResource;
 import org.slf4j.Logger;
 
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.*;
 
 /**
  * 全世界回档管理器（仅单人模式）。
@@ -24,6 +36,9 @@ import java.nio.file.attribute.BasicFileAttributes;
 public class WorldRollbackManager
 {
     private static final Logger LOGGER = LogUtils.getLogger();
+    private static final String SNAPSHOT_INDEX_FILE = ".mf_snapshot_index.tsv";
+    private static final Set<String> TRACKED_DIR_NAMES = Set.of("region", "poi", "entities", "playerdata", "data");
+    private static final int PARALLEL_COPY_THREADS = Math.max(2, Runtime.getRuntime().availableProcessors() - 1);
 
     // 回档状态机（volatile 保证客户端线程与客户端线程的可见性）
     // FILE_RESTORING：文件还原正在后台线程执行中（客户端继续渲染黑屏）
@@ -44,6 +59,22 @@ public class WorldRollbackManager
     private static final String SHEDDING_PENDING_FILE = "shedding_pending";
     // 是否已在 PENDING_RELOAD 期间提交了蜕皮扣除（避免重复提交）
     private static volatile boolean sheddingDeductScheduled = false;
+    // 快照索引预热状态
+    private static volatile boolean snapshotIndexWarmupRunning = false;
+    private static volatile Path warmedSnapshotRoot = null;
+    private static volatile SnapshotIndex warmedSnapshotIndex = SnapshotIndex.empty();
+
+    private record FileMeta(long size, long modifiedMillis) {}
+
+    private record SnapshotIndex(Map<String, FileMeta> files)
+    {
+        private static SnapshotIndex empty()
+        {
+            return new SnapshotIndex(Collections.emptyMap());
+        }
+    }
+
+    private record SyncStats(int copied, int deleted) {}
 
     // 是否已有可用快照
     public static boolean hasSnapshot()
@@ -109,13 +140,18 @@ public class WorldRollbackManager
                 {
                     try
                     {
-                        if (Files.exists(backupRoot))
-                            deleteDirectory(backupRoot);
-                        copyDirectory(worldRoot, backupRoot);
+                        Files.createDirectories(backupRoot);
+
+                        SnapshotIndex sourceIndex = buildIndex(worldRoot, true);
+                        SnapshotIndex backupIndex = readSnapshotIndexPreferWarm(backupRoot);
+                        SyncStats stats = syncTreesIncremental(worldRoot, backupRoot, sourceIndex, backupIndex);
+                        writeSnapshotIndex(backupRoot, sourceIndex);
 
                         worldRootPath = worldRoot;
                         backupRootPath = backupRoot;
-                        LOGGER.info("[Minefading] 世界快照已保存至 {}", backupRoot);
+                        warmedSnapshotRoot = backupRoot;
+                        warmedSnapshotIndex = sourceIndex;
+                        LOGGER.info("[Minefading] 世界快照增量保存完成：{}（复制 {}，删除 {}）", backupRoot, stats.copied(), stats.deleted());
                     }
                     catch (IOException e)
                     {
@@ -206,9 +242,17 @@ public class WorldRollbackManager
                         try
                         {
                             LOGGER.info("[Minefading] 正在从快照还原世界文件...");
-                            if (Files.exists(worldRoot))
-                                deleteDirectory(worldRoot);
-                            copyDirectory(backupRoot, worldRoot);
+                            Files.createDirectories(worldRoot);
+
+                            SnapshotIndex snapshotIndex = readSnapshotIndexPreferWarm(backupRoot);
+                            SnapshotIndex worldIndex = buildIndex(worldRoot, true);
+                            SyncStats stats = syncTreesIncremental(backupRoot, worldRoot, snapshotIndex, worldIndex);
+
+                            // 回档后确保快照索引继续可用
+                            warmedSnapshotRoot = backupRoot;
+                            warmedSnapshotIndex = snapshotIndex;
+
+                            LOGGER.info("[Minefading] 世界差异还原完成（复制 {}，删除 {}），准备重新加载世界...", stats.copied(), stats.deleted());
                             LOGGER.info("[Minefading] 文件还原完成，准备重新加载世界...");
                             // 通知主线程切换到 PENDING_RELOAD
                             pendingLevelId = levelId;
@@ -313,6 +357,292 @@ public class WorldRollbackManager
                 return FileVisitResult.CONTINUE;
             }
         });
+    }
+
+    /**
+     * 启动后台索引预热：读取（或重建）当前世界快照索引，减少回档首帧等待。
+     */
+    public static void prewarmSnapshotIndex(MinecraftServer server)
+    {
+        Path worldRoot = server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
+        Path backupRoot = getBackupRoot(worldRoot);
+        prewarmSnapshotIndex(backupRoot);
+    }
+
+    private static void prewarmSnapshotIndex(Path backupRoot)
+    {
+        if (!Files.isDirectory(backupRoot))
+            return;
+        if (backupRoot.equals(warmedSnapshotRoot) && !warmedSnapshotIndex.files().isEmpty())
+            return;
+        if (snapshotIndexWarmupRunning)
+            return;
+
+        snapshotIndexWarmupRunning = true;
+        Thread warmupThread = new Thread(() ->
+        {
+            try
+            {
+                SnapshotIndex index = readSnapshotIndexOrBuild(backupRoot);
+                warmedSnapshotRoot = backupRoot;
+                warmedSnapshotIndex = index;
+                LOGGER.info("[Minefading] 快照索引预热完成：{}（{} 个文件）", backupRoot, index.files().size());
+            }
+            catch (IOException e)
+            {
+                LOGGER.warn("[Minefading] 快照索引预热失败：{}", backupRoot, e);
+            }
+            finally
+            {
+                snapshotIndexWarmupRunning = false;
+            }
+        }, "MF-SnapshotIndexWarmup");
+        warmupThread.setDaemon(true);
+        warmupThread.start();
+    }
+
+    private static SnapshotIndex readSnapshotIndexPreferWarm(Path backupRoot) throws IOException
+    {
+        if (backupRoot.equals(warmedSnapshotRoot) && !warmedSnapshotIndex.files().isEmpty())
+            return warmedSnapshotIndex;
+        return readSnapshotIndexOrBuild(backupRoot);
+    }
+
+    private static SnapshotIndex readSnapshotIndexOrBuild(Path backupRoot) throws IOException
+    {
+        Path indexFile = backupRoot.resolve(SNAPSHOT_INDEX_FILE);
+        if (Files.isRegularFile(indexFile))
+            return readSnapshotIndex(indexFile);
+
+        SnapshotIndex index = buildIndex(backupRoot, true);
+        writeSnapshotIndex(backupRoot, index);
+        return index;
+    }
+
+    private static SnapshotIndex buildIndex(Path root, boolean trackedOnly) throws IOException
+    {
+        if (!Files.isDirectory(root))
+            return SnapshotIndex.empty();
+
+        Map<String, FileMeta> map = new HashMap<>();
+        Files.walkFileTree(root, new SimpleFileVisitor<>()
+        {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs)
+            {
+                if (!attrs.isRegularFile())
+                    return FileVisitResult.CONTINUE;
+                if (SNAPSHOT_INDEX_FILE.equals(file.getFileName().toString()))
+                    return FileVisitResult.CONTINUE;
+                if ("session.lock".equals(file.getFileName().toString()))
+                    return FileVisitResult.CONTINUE;
+                if (trackedOnly && !isTrackedFile(root, file))
+                    return FileVisitResult.CONTINUE;
+
+                String key = toUnixPath(root.relativize(file));
+                map.put(key, new FileMeta(attrs.size(), attrs.lastModifiedTime().toMillis()));
+                return FileVisitResult.CONTINUE;
+            }
+        });
+        return new SnapshotIndex(map);
+    }
+
+    private static boolean isTrackedFile(Path root, Path file)
+    {
+        Path rel = root.relativize(file);
+        if (rel.getNameCount() == 1)
+        {
+            return "level.dat".equals(rel.getFileName().toString());
+        }
+
+        for (int i = 0; i < rel.getNameCount() - 1; i++)
+        {
+            String segment = rel.getName(i).toString();
+            if (TRACKED_DIR_NAMES.contains(segment))
+                return true;
+        }
+        return false;
+    }
+
+    private static String toUnixPath(Path relPath)
+    {
+        return relPath.toString().replace('\\', '/');
+    }
+
+    private static SnapshotIndex readSnapshotIndex(Path indexFile) throws IOException
+    {
+        Map<String, FileMeta> map = new HashMap<>();
+        try (BufferedReader reader = Files.newBufferedReader(indexFile))
+        {
+            String line;
+            while ((line = reader.readLine()) != null)
+            {
+                if (line.isBlank())
+                    continue;
+                String[] parts = line.split("\\t", 3);
+                if (parts.length != 3)
+                    continue;
+                String path = parts[0];
+                long size = Long.parseLong(parts[1]);
+                long modified = Long.parseLong(parts[2]);
+                map.put(path, new FileMeta(size, modified));
+            }
+        }
+        return new SnapshotIndex(map);
+    }
+
+    private static void writeSnapshotIndex(Path backupRoot, SnapshotIndex index) throws IOException
+    {
+        Files.createDirectories(backupRoot);
+        Path indexFile = backupRoot.resolve(SNAPSHOT_INDEX_FILE);
+        List<String> paths = new ArrayList<>(index.files().keySet());
+        paths.sort(String::compareTo);
+
+        try (BufferedWriter writer = Files.newBufferedWriter(indexFile,
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))
+        {
+            for (String path : paths)
+            {
+                FileMeta meta = index.files().get(path);
+                writer.write(path);
+                writer.write('\t');
+                writer.write(Long.toString(meta.size()));
+                writer.write('\t');
+                writer.write(Long.toString(meta.modifiedMillis()));
+                writer.newLine();
+            }
+        }
+    }
+
+    /**
+     * 将 dstRoot 增量同步为 desired（srcRoot 提供源文件，existing 表示 dstRoot 当前索引）。
+     */
+    private static SyncStats syncTreesIncremental(Path srcRoot, Path dstRoot, SnapshotIndex desired, SnapshotIndex existing) throws IOException
+    {
+        Map<String, FileMeta> desiredMap = desired.files();
+        Map<String, FileMeta> existingMap = existing.files();
+
+        List<String> toCopy = new ArrayList<>();
+        for (Map.Entry<String, FileMeta> entry : desiredMap.entrySet())
+        {
+            FileMeta old = existingMap.get(entry.getKey());
+            if (old == null || old.size() != entry.getValue().size() || old.modifiedMillis() != entry.getValue().modifiedMillis())
+            {
+                toCopy.add(entry.getKey());
+            }
+        }
+
+        List<String> toDelete = new ArrayList<>();
+        for (String key : existingMap.keySet())
+        {
+            if (!desiredMap.containsKey(key))
+                toDelete.add(key);
+        }
+
+        copyFilesParallel(srcRoot, dstRoot, toCopy);
+        deleteFilesAndPruneEmptyDirs(dstRoot, toDelete);
+
+        return new SyncStats(toCopy.size(), toDelete.size());
+    }
+
+    private static void copyFilesParallel(Path srcRoot, Path dstRoot, Collection<String> relPaths) throws IOException
+    {
+        if (relPaths.isEmpty())
+            return;
+
+        ExecutorService pool = Executors.newFixedThreadPool(PARALLEL_COPY_THREADS, r ->
+        {
+            Thread t = new Thread(r, "MF-ParallelCopy");
+            t.setDaemon(true);
+            return t;
+        });
+
+        List<Future<Void>> futures = new ArrayList<>();
+        for (String rel : relPaths)
+        {
+            futures.add(pool.submit(() ->
+            {
+                Path src = srcRoot.resolve(rel.replace('/', FileSystems.getDefault().getSeparator().charAt(0)));
+                Path dst = dstRoot.resolve(rel.replace('/', FileSystems.getDefault().getSeparator().charAt(0)));
+
+                if (!Files.exists(src))
+                    return null;
+                Files.createDirectories(dst.getParent());
+                Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES);
+                return null;
+            }));
+        }
+
+        pool.shutdown();
+
+        IOException firstIoException = null;
+        for (Future<Void> future : futures)
+        {
+            try
+            {
+                future.get();
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                if (firstIoException == null)
+                    firstIoException = new IOException("并行拷贝被中断", e);
+            }
+            catch (ExecutionException e)
+            {
+                Throwable cause = e.getCause();
+                if (firstIoException == null)
+                {
+                    firstIoException = cause instanceof IOException
+                            ? (IOException) cause
+                            : new IOException("并行拷贝失败", cause);
+                }
+            }
+        }
+
+        if (firstIoException != null)
+            throw firstIoException;
+    }
+
+    private static void deleteFilesAndPruneEmptyDirs(Path root, Collection<String> relPaths) throws IOException
+    {
+        if (relPaths.isEmpty())
+            return;
+
+        Set<Path> candidateDirs = new HashSet<>();
+        for (String rel : relPaths)
+        {
+            Path file = root.resolve(rel.replace('/', FileSystems.getDefault().getSeparator().charAt(0)));
+            Files.deleteIfExists(file);
+            Path parent = file.getParent();
+            while (parent != null && parent.startsWith(root))
+            {
+                candidateDirs.add(parent);
+                if (parent.equals(root))
+                    break;
+                parent = parent.getParent();
+            }
+        }
+
+        List<Path> dirs = new ArrayList<>(candidateDirs);
+        dirs.sort(Comparator.comparingInt(Path::getNameCount).reversed());
+        for (Path dir : dirs)
+        {
+            if (dir.equals(root))
+                continue;
+            if (isDirectoryEmpty(dir))
+                Files.deleteIfExists(dir);
+        }
+    }
+
+    private static boolean isDirectoryEmpty(Path dir) throws IOException
+    {
+        if (!Files.isDirectory(dir))
+            return false;
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir))
+        {
+            return !stream.iterator().hasNext();
+        }
     }
 
     // 递归删除目录

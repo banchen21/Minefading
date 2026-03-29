@@ -97,6 +97,10 @@ public class DaySystemEvents
             checkedLevelId = levelId;
             entrySnapshotChecked = false;
         }
+
+        // 进入世界后后台预热快照索引，减少回档触发时的首帧等待
+        WorldRollbackManager.prewarmSnapshotIndex(server);
+
         if (!entrySnapshotChecked)
         {
             entrySnapshotChecked = true;
