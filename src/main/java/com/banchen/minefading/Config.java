@@ -47,15 +47,15 @@ public class Config
             .comment("柯罗诺斯效果的持续时长，单位为秒。")
             .defineInRange("kronosSeconds", 20, 1, 3600);
 
-    // 柯罗诺斯慢时最大额外延迟（毫秒）
-    private static final ForgeConfigSpec.DoubleValue KRONOS_EXTRA_WAIT_MAX_MS = BUILDER
-            .comment("柯罗诺斯慢时时每 tick 的最大额外延迟，单位毫秒。值越大，时间越慢。")
-            .defineInRange("kronosExtraWaitMaxMs", 55.0D, 0.0D, 1000.0D);
+    // 柯罗诺斯慢时目标流速（小数比例）
+    private static final ForgeConfigSpec.DoubleValue KRONOS_SPEED_RATIO = BUILDER
+            .comment("柯罗诺斯慢时的目标时间流速。0.05 表示时间以正常速度的 5% 流逝。1.0 表示不减速。")
+            .defineInRange("kronosSpeedRatio", 0.05D, 0.01D, 1.0D);
 
     // 柯罗诺斯慢时渐变步长（毫秒）
     private static final ForgeConfigSpec.DoubleValue KRONOS_RAMP_STEP_MS = BUILDER
             .comment("柯罗诺斯慢时每 tick 增减的延迟步长，单位毫秒。值越大，进入和退出慢时越快。")
-            .defineInRange("kronosRampStepMs", 3.0D, 0.1D, 100.0D);
+            .defineInRange("kronosRampStepMs", 50.0D, 0.1D, 5000.0D);
 
     // 吸入器最大耐久
     private static final ForgeConfigSpec.IntValue INHALER_DURABILITY = BUILDER
@@ -77,8 +77,9 @@ public class Config
         public static float rollbackTextScale = 1.8F;
     public static int causalityTicks = 20 * 20;
     public static int kronosTicks = 20 * 20;
-    public static double kronosExtraWaitMaxMs = 55.0D;
-    public static double kronosRampStepMs = 3.0D;
+    public static double kronosSpeedRatio = 0.25D;
+    public static double kronosExtraWaitMaxMs = 950.0D; // 由 kronosSpeedRatio 换算
+    public static double kronosRampStepMs = 50.0D;
     public static int inhalerDurability = 30;
     public static String introduction;
 
@@ -92,7 +93,8 @@ public class Config
         rollbackTextScale = ROLLBACK_TEXT_SCALE.get().floatValue();
         causalityTicks = CAUSALITY_SECONDS.get() * 20;
         kronosTicks = KRONOS_SECONDS.get() * 20;
-        kronosExtraWaitMaxMs = KRONOS_EXTRA_WAIT_MAX_MS.get();
+        kronosSpeedRatio = KRONOS_SPEED_RATIO.get();
+        kronosExtraWaitMaxMs = (50.0D / kronosSpeedRatio) - 50.0D;
         kronosRampStepMs = KRONOS_RAMP_STEP_MS.get();
         inhalerDurability = INHALER_DURABILITY.get();
         introduction = INTRODUCTION.get();

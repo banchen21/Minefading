@@ -1,18 +1,13 @@
 {
-  "type": "minecraft:crafting_shaped",
-  "pattern": [
-    " D ",
-    " N ",
-    " D "
-  ],
-  "key": {
-    "D": {
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    {
       "item": "minecraft:dragon_egg"
     },
-    "N": {
+    {
       "item": "minecraft:nether_star"
     }
-  },
+  ],
   "result": {
     "item": "minefading:tower",
     "count": 1

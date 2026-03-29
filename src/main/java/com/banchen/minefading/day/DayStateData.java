@@ -2,8 +2,10 @@ package com.banchen.minefading.day;
 
 import com.banchen.minefading.Minefading;
 import com.banchen.minefading.relic.TrackedEntityManager;
+import com.mojang.logging.LogUtils;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.NbtUtils;
 import net.minecraft.nbt.Tag;
 import net.minecraft.core.registries.Registries;
@@ -14,21 +16,27 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.saveddata.SavedData;
+import net.minecraft.world.level.storage.LevelResource;
+import org.slf4j.Logger;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
-// 天数状态的持久化数据，存储于世界 data 目录中
+// 天数状态的持久化数据，独立存储于 config/minefading/data/day_state/ 目录中
 // 管理显示天数偏移、存档点、被追踪实体列表及其位置快照及其NBT
-public class DayStateData extends SavedData
+public class DayStateData
 {
-    private static final String DATA_NAME = Minefading.MODID + "_day_state";
+    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final String DATA_FILE_NAME = "day_state.dat";
+    private static final Map<String, DayStateData> CACHE = new ConcurrentHashMap<>();
 
     // 显示天数 = 世界天数 + offsetDays，用于回档后保持天数显示不跳变
     private int offsetDays;
@@ -46,14 +54,42 @@ public class DayStateData extends SavedData
     private final TrackedEntityManager entityManager = new TrackedEntityManager();
     // 是否已初始化entityManager（从文件加载）
     private boolean entityManagerInitialized = false;
+    // 当前世界对应的数据文件路径（位于 config/minefading/data/day_state/<levelId>/day_state.dat）
+    private transient Path storageFile;
 
-    // 从世界数据存储中获取或创建 DayStateData 实例（单例模式）
+    // 从外部文件中获取或创建 DayStateData 实例（按世界 ID 缓存）
     public static DayStateData get(MinecraftServer server)
     {
-        return server.overworld().getDataStorage().computeIfAbsent(DayStateData::load, DayStateData::new, DATA_NAME);
+        String levelId = getLevelId(server);
+        return CACHE.computeIfAbsent(levelId, id -> loadFromExternal(server, id));
     }
 
-    public static DayStateData load(CompoundTag tag)
+    private static DayStateData loadFromExternal(MinecraftServer server, String levelId)
+    {
+        Path file = resolveStorageFile(server, levelId);
+        DayStateData data;
+        if (Files.isRegularFile(file))
+        {
+            try
+            {
+                data = load(NbtIo.readCompressed(file.toFile()));
+            }
+            catch (IOException e)
+            {
+                LOGGER.error("[Minefading] 读取 DayStateData 外部数据失败：{}", file, e);
+                data = new DayStateData();
+            }
+        }
+        else
+        {
+            data = new DayStateData();
+        }
+
+        data.storageFile = file;
+        return data;
+    }
+
+    private static DayStateData load(CompoundTag tag)
     {
         DayStateData data = new DayStateData();
         data.offsetDays = tag.getInt("OffsetDays");
@@ -76,8 +112,7 @@ public class DayStateData extends SavedData
         return data;
     }
 
-    @Override
-    public CompoundTag save(CompoundTag tag)
+    private CompoundTag save(CompoundTag tag)
     {
         tag.putInt("OffsetDays", offsetDays);
         tag.putInt("RollbackDisplayDay", rollbackDisplayDay);
@@ -104,6 +139,41 @@ public class DayStateData extends SavedData
         return tag;
     }
 
+    private static String getLevelId(MinecraftServer server)
+    {
+        return server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize().getFileName().toString();
+    }
+
+    private static Path resolveStorageFile(MinecraftServer server, String levelId)
+    {
+        Path worldRoot = server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
+        Path savesDir = worldRoot.getParent();
+        Path gameDir = savesDir != null ? savesDir.getParent() : null;
+        if (gameDir == null)
+            gameDir = worldRoot.toAbsolutePath().getParent();
+
+        Path dataDir = gameDir.resolve("config").resolve(Minefading.MODID).resolve("data").resolve("day_state").resolve(levelId);
+        return dataDir.resolve(DATA_FILE_NAME);
+    }
+
+    private void persist()
+    {
+        if (storageFile == null)
+            return;
+
+        try
+        {
+            Files.createDirectories(storageFile.getParent());
+            CompoundTag tag = new CompoundTag();
+            save(tag);
+            NbtIo.writeCompressed(tag, storageFile.toFile());
+        }
+        catch (IOException e)
+        {
+            LOGGER.error("[Minefading] 写入 DayStateData 外部数据失败：{}", storageFile, e);
+        }
+    }
+
     // 首次进入世界时初始化，避免天数从 1 开始强行跳变
     public void initializeIfNeeded(int worldDay)
     {
@@ -113,7 +183,7 @@ public class DayStateData extends SavedData
         lastWorldDay = worldDay;
         checkpointDisplayDay = Math.max(1, getDisplayedDay(worldDay));
         rollbackDisplayDay = Math.max(1, checkpointDisplayDay - 1);
-        setDirty();
+        persist();
     }
 
     // 世界天数变化时调用：更新记录并返回"是否刚过了一天"
@@ -125,7 +195,7 @@ public class DayStateData extends SavedData
 
         lastWorldDay = worldDay;
         rollbackDisplayDay = Math.max(1, checkpointDisplayDay); // 前一天的检查点成为回滚目标
-        setDirty();
+        persist();
         return true;
     }
 
@@ -177,7 +247,14 @@ public class DayStateData extends SavedData
         checkpointDisplayDay = Math.max(1, getDisplayedDay(worldDay));
         rollbackDisplayDay = Math.max(1, checkpointDisplayDay);
         snapshotTrackedEntities(server);
-        setDirty();
+        persist();
+    }
+
+    // 真正开始回溯前抓取当前追踪实体状态，保证带回的是“未来此刻”的实体。
+    public void captureTrackedEntitiesForRollback(MinecraftServer server)
+    {
+        snapshotTrackedEntities(server);
+        persist();
     }
 
     // 将实体 UUID 加入追踪列表，并保存其完整 NBT 数据到文件
@@ -188,7 +265,7 @@ public class DayStateData extends SavedData
             trackedEntityIds.add(entityId);
             entityManager.cacheEntity(entityId, entity);
             entityManager.flushToFile(server);
-            setDirty();
+            persist();
         }
         catch (Exception e)
         {
@@ -201,7 +278,7 @@ public class DayStateData extends SavedData
     public void trackEntity(UUID entityId)
     {
         trackedEntityIds.add(entityId);
-        setDirty();
+        persist();
     }
 
     // 记录所有追踪实体的当前坐标、维度及完整 NBT 数据
@@ -263,7 +340,7 @@ public class DayStateData extends SavedData
                     summonEntity = changed;
             }
 
-            summonEntity.teleportTo(anchorPlayer.getX() + 1.0D, anchorPlayer.getY(), anchorPlayer.getZ());
+            summonEntity.teleportTo(anchorPlayer.getX(), anchorPlayer.getY(), anchorPlayer.getZ());
             consumedIds.add(entityId);
         }
 
@@ -286,7 +363,7 @@ public class DayStateData extends SavedData
             // 日志已在 TrackedEntityManager 中输出
         }
 
-        setDirty();
+        persist();
     }
 
     private Entity findEntity(MinecraftServer server, UUID id)
@@ -304,7 +381,7 @@ public class DayStateData extends SavedData
     public void setDisplayedDay(int worldDay, int displayedDay)
     {
         offsetDays = Math.max(1, displayedDay) - worldDay;
-        setDirty();
+        persist();
     }
 
     // 追踪实体的位置快照（维度 + 坐标）

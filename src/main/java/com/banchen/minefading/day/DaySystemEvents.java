@@ -4,10 +4,12 @@ import com.banchen.minefading.Config;
 import com.banchen.minefading.Minefading;
 import com.banchen.minefading.WorldRollbackManager;
 import com.banchen.minefading.client.ClientDayOverlay;
+import com.banchen.minefading.relic.RelicRuntime;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.storage.LevelResource;
@@ -36,10 +38,10 @@ public class DaySystemEvents
         return (int) (level.getDayTime() / 24000L) + 1;
     }
 
-    // 创意模式和旁观模式不受天数系统影响
+    // 仅旁观模式不受天数系统影响（创造模式同样受影响）
     private static boolean canAffectPlayer(Player player)
     {
-        return !player.isCreative() && !player.isSpectator();
+        return !player.isSpectator();
     }
 
     // 触发黑屏覆盖层显示当前天数信息
@@ -104,7 +106,13 @@ public class DaySystemEvents
         if (!entrySnapshotChecked)
         {
             entrySnapshotChecked = true;
-            if (!WorldRollbackManager.consumeSkipAutoEntryCheck(server))
+            if (WorldRollbackManager.consumePreEntryRestore())
+            {
+                // 世界加载前已完成快照文件还原，现在应用回档状态（天数偏移、追踪实体、蜕皮扣除）
+                final MinecraftServer srv = server;
+                srv.execute(() -> WorldRollbackManager.applyPreEntryRollbackState(srv));
+            }
+            else if (!WorldRollbackManager.consumeSkipAutoEntryCheck(server))
             {
                 if (WorldRollbackManager.hasSnapshot(server))
                 {
@@ -157,6 +165,18 @@ public class DaySystemEvents
         // 玩家死亡时触发全世界回档
         if (player.isDeadOrDying() && !deathHandled)
         {
+            ServerPlayer serverPlayer = server.getPlayerList().getPlayer(player.getUUID());
+            if (RelicRuntime.isCausalityActive(player.getUUID()) || RelicRuntime.isCausalityRecoveryActive(player.getUUID()))
+            {
+                deathHandled = true;
+                return;
+            }
+            if (serverPlayer != null && RelicRuntime.canCausalityPreventDeath(serverPlayer))
+            {
+                deathHandled = true;
+                return;
+            }
+
             WorldRollbackManager.scheduleRestore(server);
             deathHandled = true;
         }

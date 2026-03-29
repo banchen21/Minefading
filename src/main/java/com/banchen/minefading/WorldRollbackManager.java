@@ -1,10 +1,12 @@
 package com.banchen.minefading;
 
 import com.banchen.minefading.client.BlackTransitionScreen;
+import com.banchen.minefading.day.DayStateData;
 import com.banchen.minefading.item.RelicItems;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -39,6 +41,13 @@ public class WorldRollbackManager
     private static final String SNAPSHOT_INDEX_FILE = ".mf_snapshot_index.tsv";
     private static final Set<String> TRACKED_DIR_NAMES = Set.of("region", "poi", "entities", "playerdata", "data");
     private static final int PARALLEL_COPY_THREADS = Math.max(2, Runtime.getRuntime().availableProcessors() - 1);
+    private static final ExecutorService SNAPSHOT_EXECUTOR = Executors.newSingleThreadExecutor(r ->
+    {
+        Thread t = new Thread(r, "MF-Snapshot");
+        t.setDaemon(true);
+        return t;
+    });
+    private static final Object SNAPSHOT_TASK_MONITOR = new Object();
 
     // 回档状态机（volatile 保证客户端线程与客户端线程的可见性）
     // FILE_RESTORING：文件还原正在后台线程执行中（客户端继续渲染黑屏）
@@ -63,6 +72,10 @@ public class WorldRollbackManager
     private static volatile boolean snapshotIndexWarmupRunning = false;
     private static volatile Path warmedSnapshotRoot = null;
     private static volatile SnapshotIndex warmedSnapshotIndex = SnapshotIndex.empty();
+    private static volatile int snapshotTasksInFlight = 0;
+    private static volatile boolean rollbackStateApplied = false;
+    // 世界加载前预还原是否完成（由 Mixin 在 loadLevel 前设置，由 DaySystemEvents 进入世界后消费）
+    private static volatile boolean preEntryRestorePending = false;
 
     private record FileMeta(long size, long modifiedMillis) {}
 
@@ -79,7 +92,7 @@ public class WorldRollbackManager
     // 是否已有可用快照
     public static boolean hasSnapshot()
     {
-        return backupRootPath != null && Files.exists(backupRootPath);
+        return backupRootPath != null && (Files.exists(backupRootPath) || hasPendingSnapshotTasks());
     }
 
     // 是否存在“当前世界”的可用快照（即使本次启动尚未写入 backupRootPath）
@@ -87,7 +100,7 @@ public class WorldRollbackManager
     {
         Path worldRoot = server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
         Path backupRoot = getBackupRoot(worldRoot);
-        return Files.exists(backupRoot);
+        return Files.exists(backupRoot) || hasPendingSnapshotTasks();
     }
 
     // 删除当前世界快照（用于高塔触发前清空回溯点）
@@ -103,6 +116,11 @@ public class WorldRollbackManager
             deleteDirectory(backupRoot);
             if (backupRootPath != null && backupRootPath.equals(backupRoot))
                 backupRootPath = null;
+            if (backupRoot.equals(warmedSnapshotRoot))
+            {
+                warmedSnapshotRoot = null;
+                warmedSnapshotIndex = SnapshotIndex.empty();
+            }
             LOGGER.info("[Minefading] 已删除世界快照：{}", backupRoot);
         }
         catch (IOException e)
@@ -129,14 +147,18 @@ public class WorldRollbackManager
         {
             try
             {
+                ServerLevel overworld = server.overworld();
+                DayStateData.get(server).saveCheckpoint(server, getWorldDay(overworld));
                 server.saveEverything(true, false, true);
 
                 // normalize() 将 saves/<世界名>/. 解析为 saves/<世界名>，避免 getFileName() 返回 "."
                 final Path worldRoot = server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
                 final Path backupRoot = getBackupRoot(worldRoot);
 
+                beginSnapshotTask();
+
                 // 文件拷贝耗时较长，移至后台线程，避免阻塞客户端线程导致接下来的 clearLevel() 卡顿
-                Thread copyThread = new Thread(() ->
+                SNAPSHOT_EXECUTOR.execute(() ->
                 {
                     try
                     {
@@ -157,9 +179,11 @@ public class WorldRollbackManager
                     {
                         LOGGER.error("[Minefading] 世界快照保存失败", e);
                     }
-                }, "MF-Snapshot");
-                copyThread.setDaemon(true);
-                copyThread.start();
+                    finally
+                    {
+                        finishSnapshotTask();
+                    }
+                });
             }
             catch (Exception e)
             {
@@ -195,9 +219,14 @@ public class WorldRollbackManager
             return;
         }
 
+        // 细沙要求“回溯时才把生物带到过去”，因此这里在真正断开并还原前
+        // 抓取一次当前追踪实体的最新状态，而不是把整张世界快照往前推进。
+        server.executeBlocking(() -> DayStateData.get(server).captureTrackedEntitiesForRollback(server));
+
         pendingLevelId = worldRootPath.getFileName().toString();
         reloadStarted = false;
         playerReadyTicks = 0;
+        rollbackStateApplied = false;
         state = State.PENDING_DISCONNECT;
         LOGGER.info("[Minefading] 回档已触发，levelId={}", pendingLevelId);
     }
@@ -223,6 +252,17 @@ public class WorldRollbackManager
         {
             case PENDING_DISCONNECT ->
             {
+                if (hasPendingSnapshotTasks())
+                    return;
+
+                if (backupRootPath == null || !Files.exists(backupRootPath))
+                {
+                    LOGGER.warn("[Minefading] 回档时未找到可用快照，已取消本次回档：{}", backupRootPath);
+                    state = State.IDLE;
+                    pendingLevelId = null;
+                    return;
+                }
+
                 net.minecraft.client.server.IntegratedServer srv = minecraft.getSingleplayerServer();
                 if (srv != null)
                 {
@@ -303,13 +343,21 @@ public class WorldRollbackManager
                 }
 
                 // 玩家刚就绪（黑屏仍在显示），立即在服务端线程扣除蜕皮
-                if (playerReadyTicks == 1 && !sheddingDeductScheduled)
+                if (playerReadyTicks == 1 && !rollbackStateApplied)
                 {
-                    sheddingDeductScheduled = true;
+                    rollbackStateApplied = true;
                     MinecraftServer srv = minecraft.getSingleplayerServer();
                     if (srv != null)
                     {
-                        srv.execute(() -> deductSheddingFromMarker(srv));
+                        srv.execute(() ->
+                        {
+                            applyRollbackCheckpointState(srv);
+                            if (!sheddingDeductScheduled)
+                            {
+                                sheddingDeductScheduled = true;
+                                deductSheddingFromMarker(srv);
+                            }
+                        });
                     }
                 }
 
@@ -324,6 +372,7 @@ public class WorldRollbackManager
                     reloadStarted = false;
                     playerReadyTicks = 0;
                     sheddingDeductScheduled = false;
+                    rollbackStateApplied = false;
                     // entrySnapshotChecked 在回档期间保持 true（isRestoring 阻止了重置），
                     // 已足以防止本次重载时再次触发入口检查，无需保留 skipNextEntryCheckLevelId。
                     // 若不清除，该标记会残留到下次退出重进时才被 consumeSkipAutoEntryCheck 消耗，
@@ -333,6 +382,15 @@ public class WorldRollbackManager
             }
             default -> { /* IDLE：无需处理 */ }
         }
+    }
+
+    private static void applyRollbackCheckpointState(MinecraftServer server)
+    {
+        ServerLevel overworld = server.overworld();
+        if (overworld == null)
+            return;
+
+        DayStateData.get(server).rollbackToCheckpoint(server, getWorldDay(overworld));
     }
 
     /**
@@ -621,6 +679,37 @@ public class WorldRollbackManager
         }
     }
 
+    private static void beginSnapshotTask()
+    {
+        synchronized (SNAPSHOT_TASK_MONITOR)
+        {
+            snapshotTasksInFlight++;
+        }
+    }
+
+    private static void finishSnapshotTask()
+    {
+        synchronized (SNAPSHOT_TASK_MONITOR)
+        {
+            if (snapshotTasksInFlight > 0)
+                snapshotTasksInFlight--;
+            SNAPSHOT_TASK_MONITOR.notifyAll();
+        }
+    }
+
+    private static boolean hasPendingSnapshotTasks()
+    {
+        synchronized (SNAPSHOT_TASK_MONITOR)
+        {
+            return snapshotTasksInFlight > 0;
+        }
+    }
+
+    private static int getWorldDay(ServerLevel level)
+    {
+        return (int) (level.getDayTime() / 24000L) + 1;
+    }
+
     // 递归删除目录
     private static void deleteDirectory(Path path) throws IOException
     {
@@ -762,5 +851,79 @@ public class WorldRollbackManager
         {
             LOGGER.error("[Minefading] 扫描快照目录失败", e);
         }
+    }
+
+    // ── 世界加载前预还原（由 Mixin 在 WorldOpenFlows.loadLevel HEAD 调用） ──
+
+    /**
+     * 在世界实际加载前检查快照是否存在：若存在则同步还原文件到存档目录，
+     * 使 IntegratedServer 直接以快照状态启动，避免"加载 → 断开 → 还原 → 重载"的二次加载。
+     */
+    public static void preEntryRestoreIfNeeded(String levelId)
+    {
+        // 回档状态机进行中（PENDING_RELOAD 调用的 loadLevel），不做预还原
+        if (state != State.IDLE)
+            return;
+
+        // 回档后重进世界时跳过（避免二次还原）
+        if (levelId.equals(skipNextEntryCheckLevelId))
+            return;
+
+        Path gameDir = Minecraft.getInstance().gameDirectory.toPath();
+        Path snapshotDir = gameDir.resolve("minefading_snapshots").resolve(levelId);
+
+        if (!Files.isDirectory(snapshotDir))
+            return;
+
+        Path worldDir = gameDir.resolve("saves").resolve(levelId);
+
+        try
+        {
+            LOGGER.info("[Minefading] 检测到快照，在世界加载前执行预还原：{}", snapshotDir);
+            Files.createDirectories(worldDir);
+
+            SnapshotIndex snapshotIndex = readSnapshotIndexPreferWarm(snapshotDir);
+            SnapshotIndex worldIndex = buildIndex(worldDir, true);
+            SyncStats stats = syncTreesIncremental(snapshotDir, worldDir, snapshotIndex, worldIndex);
+
+            // 缓存快照索引供后续使用
+            warmedSnapshotRoot = snapshotDir;
+            warmedSnapshotIndex = snapshotIndex;
+            // 记录路径供后续 hasSnapshot / takeSnapshot 使用
+            worldRootPath = worldDir;
+            backupRootPath = snapshotDir;
+
+            preEntryRestorePending = true;
+            LOGGER.info("[Minefading] 预还原完成（复制 {}，删除 {}），世界将以快照状态加载",
+                    stats.copied(), stats.deleted());
+        }
+        catch (IOException e)
+        {
+            LOGGER.error("[Minefading] 预还原失败，世界将以当前状态加载", e);
+        }
+    }
+
+    /**
+     * 消费预还原标记：若为 true 则表示本次进入世界是预还原后的首次加载，
+     * 需要在服务端执行回档状态恢复（天数偏移、追踪实体、蜕皮扣除等）。
+     */
+    public static boolean consumePreEntryRestore()
+    {
+        if (preEntryRestorePending)
+        {
+            preEntryRestorePending = false;
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 预还原后应用回档状态：恢复天数偏移与追踪实体，然后处理蜕皮标记扣除。
+     * 由 DaySystemEvents 在进入世界后通过 server.execute() 调度到服务端线程执行。
+     */
+    public static void applyPreEntryRollbackState(MinecraftServer server)
+    {
+        applyRollbackCheckpointState(server);
+        deductSheddingFromMarker(server);
     }
 }

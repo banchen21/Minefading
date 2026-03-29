@@ -14,10 +14,12 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.storage.LevelResource;
 import org.slf4j.Logger;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -93,10 +95,11 @@ public class TrackedEntityManager
      */
     public void loadFromFile(MinecraftServer server) throws IOException
     {
-        File dataDirectory = getDataDirectory(server);
-        File file = new File(dataDirectory, FILE_NAME);
+        File file = new File(getDataDirectory(server), FILE_NAME);
+        File legacyFile = new File(getLegacyDataDirectory(server), FILE_NAME);
+        File sourceFile = file.exists() ? file : legacyFile;
 
-        if (!file.exists())
+        if (!sourceFile.exists())
         {
             LOGGER.info("[Minefading] 未找到追踪实体数据文件");
             return;
@@ -104,7 +107,10 @@ public class TrackedEntityManager
 
         try
         {
-            CompoundTag root = NbtIo.readCompressed(file);
+            if (sourceFile.equals(legacyFile) && !file.exists())
+                LOGGER.info("[Minefading] 使用旧版追踪实体数据文件迁移加载：{}", legacyFile.getAbsolutePath());
+
+            CompoundTag root = NbtIo.readCompressed(sourceFile);
             ListTag entitiesTag = root.getList("TrackedEntities", Tag.TAG_COMPOUND);
 
             entityCache.clear();
@@ -203,15 +209,27 @@ public class TrackedEntityManager
     }
 
     /**
-     * 获取追踪数据存储目录（<世界根>/data/minefading/）。
+     * 获取追踪数据存储目录（<gameDir>/config/minefading/data/tracked_entities/<levelId>/）。
+     * 放在世界目录外，避免细沙记录被旧快照覆盖，从而不必因为细沙而推进全世界回档点。
      */
     private File getDataDirectory(MinecraftServer server)
     {
         try
         {
-            File worldDataDir = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).toFile();
-            File modDataDir = new File(worldDataDir, "data" + File.separator + Minefading.MODID);
-            
+            Path worldRoot = server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
+            Path savesDir = worldRoot.getParent();
+            Path gameDir = savesDir != null ? savesDir.getParent() : null;
+            if (gameDir == null)
+                gameDir = worldRoot.getParent();
+
+            Path dataDir = gameDir
+                    .resolve("config")
+                    .resolve(Minefading.MODID)
+                    .resolve("data")
+                    .resolve("tracked_entities")
+                    .resolve(worldRoot.getFileName().toString());
+            File modDataDir = dataDir.toFile();
+             
             // 确保目录存在
             if (!modDataDir.exists() && !modDataDir.mkdirs())
             {
@@ -224,6 +242,12 @@ public class TrackedEntityManager
             LOGGER.error("[Minefading] 获取数据目录失败", e);
             throw new RuntimeException(e);
         }
+    }
+
+    private File getLegacyDataDirectory(MinecraftServer server)
+    {
+        File worldDataDir = server.getWorldPath(LevelResource.ROOT).toFile();
+        return new File(worldDataDir, "data" + File.separator + Minefading.MODID);
     }
 
     /**

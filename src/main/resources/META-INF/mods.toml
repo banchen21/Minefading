@@ -71,3 +71,6 @@ description='''${mod_description}'''
 # so declaring one here will not block dedicated server startup unless the feature is required there.
 #[features.minefading]
 #openGLVersion="[3.2,)"
+
+[[mixins]]
+config="minefading.mixins.json"

@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "minVersion": "0.8.5",
+  "package": "com.banchen.minefading.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "minefading.refmap.json",
+  "client": [
+    "MinecraftAccessor",
+    "TimerAccessor",
+    "WorldOpenFlowsMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

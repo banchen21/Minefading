@@ -4,6 +4,8 @@ import com.banchen.minefading.Config;
 import com.banchen.minefading.Minefading;
 import com.banchen.minefading.WorldRollbackManager;
 import com.banchen.minefading.day.DayMode;
+import com.banchen.minefading.relic.RelicGameplayEvents;
+import com.banchen.minefading.relic.RelicRuntime;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
 import net.minecraftforge.api.distmarker.Dist;
@@ -48,6 +50,9 @@ public class ClientDayOverlay
     {
         hudText = "";
     }
+
+    // 时缓朦胧层的客户端平滑插值因子（0.0~1.0）
+    private static float kronosOverlayAlpha = 0.0F;
 
     // 每客户端 tick 减少全屏黑幕的剩余时长（暂停时不减少）
     @SubscribeEvent
@@ -94,6 +99,28 @@ public class ClientDayOverlay
             int x = width / 2 - 91;
             int y = height - 52;
             event.getGuiGraphics().drawString(minecraft.font, hudText, x, y, 0xFFFFFF, false);
+
+            // 因果激活时在天数文字右侧显示标识
+            if (minecraft.player != null && RelicRuntime.isCausalityActive(minecraft.player.getUUID()))
+            {
+                int causalityX = x + minecraft.font.width(hudText) + 4;
+                event.getGuiGraphics().drawString(minecraft.font, "因果", causalityX, y, 0xFFD700, false);
+            }
+        }
+
+        // 时缓朦胧层：客户端侧平滑渐变进入/退出
+        float targetAlpha = (float) RelicGameplayEvents.getKronosSlowFactor();
+        float lerpSpeed = 0.05F; // 每帧插值步长，越小越平滑
+        if (kronosOverlayAlpha < targetAlpha)
+            kronosOverlayAlpha = Math.min(targetAlpha, kronosOverlayAlpha + lerpSpeed);
+        else if (kronosOverlayAlpha > targetAlpha)
+            kronosOverlayAlpha = Math.max(targetAlpha, kronosOverlayAlpha - lerpSpeed);
+
+        if (kronosOverlayAlpha > 0.001F)
+        {
+            int alpha = (int) (kronosOverlayAlpha * 40); // 最大 alpha 约 40/255
+            if (alpha > 0)
+                event.getGuiGraphics().fill(0, 0, width, height, (alpha << 24) | 0xFFD700);
         }
     }
 
