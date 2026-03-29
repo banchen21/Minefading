@@ -2,8 +2,6 @@ package com.banchen.minefading.client;
 
 import com.banchen.minefading.Config;
 import com.banchen.minefading.Minefading;
-import com.banchen.minefading.mixin.MinecraftAccessor;
-import com.banchen.minefading.mixin.TimerAccessor;
 import com.banchen.minefading.relic.RelicRuntime;
 import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
@@ -27,15 +25,14 @@ public class KronosClientTicker
             return;
 
         Minecraft minecraft = Minecraft.getInstance();
-        Timer timer = ((MinecraftAccessor) minecraft).minefading$getTimer();
-        TimerAccessor timerAccessor = (TimerAccessor) timer;
+        Timer timer = minecraft.timer;
 
         float targetMsPerTick = resolveTargetMsPerTick(minecraft);
-        if (Math.abs(timerAccessor.minefading$getMsPerTick() - targetMsPerTick) <= EPSILON)
+        if (Math.abs(timer.msPerTick - targetMsPerTick) <= EPSILON)
             return;
 
-        timerAccessor.minefading$setMsPerTick(targetMsPerTick);
-        timerAccessor.minefading$setLastMs(Util.getMillis());
+        timer.msPerTick = targetMsPerTick;
+        timer.lastMs = Util.getMillis();
     }
 
     private static float resolveTargetMsPerTick(Minecraft minecraft)

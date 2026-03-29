@@ -42,6 +42,7 @@ public class RelicRuntime
     private static final Gson GSON = new Gson();
     private static final String SPECTATOR_LOCK_FILE = "spectator_locked.json";
     private static final String CAUSALITY_CANDIDATE_FILE = "causality_candidate.json";
+    private static final float CAUSALITY_HEALTH_COST = 20.0F;
     private static final int CAUSALITY_RECOVERY_TICKS = 20;
     // 当前激活因果效果的玩家及其剩余 tick 数
     private static final Map<UUID, Integer> causalityActiveTicks = new ConcurrentHashMap<>();
@@ -136,7 +137,8 @@ public class RelicRuntime
         }
     }
 
-    // 因果致死伤害拦截：若玩家激活了因果且存在符合条件的替身，替身替玩家承受致死伤害
+    // 因果致死伤害拦截：若玩家激活了因果且存在符合条件的替身，
+    // 替身优先支付 20 点生命；若这会导致替身死亡，则改为与玩家互换位置
     // 返回 true 表示拦截成功（本次伤害/死亡事件应被取消）
     public static boolean tryHandleCausalityLethalDamage(ServerPlayer player)
     {
@@ -150,10 +152,11 @@ public class RelicRuntime
         if (substitute == null)
             return false;
 
-        player.setHealth(Math.max(1.0F, player.getMaxHealth() * 0.5F));
-        if (substitute.level() instanceof ServerLevel level)
-            player.teleportTo(level, substitute.getX(), substitute.getY(), substitute.getZ(), player.getYRot(), player.getXRot());
-        substitute.hurt(substitute.damageSources().magic(), Float.MAX_VALUE);
+        if (substitute.getHealth() > CAUSALITY_HEALTH_COST)
+            applyCausalityHealthTransfer(player, substitute);
+        else
+            swapPlayerWithSubstitute(player, substitute);
+
         player.displayClientMessage(Component.translatable("message.minefading.causality_triggered"), true);
         causalityActiveTicks.remove(playerId);
         causalityRecoveryTicks.put(playerId, CAUSALITY_RECOVERY_TICKS);
@@ -180,6 +183,76 @@ public class RelicRuntime
     public static boolean canCausalityPreventDeath(ServerPlayer player)
     {
         return wouldCausalityPreventLethalDamage(player);
+    }
+
+    private static void applyCausalityHealthTransfer(ServerPlayer player, LivingEntity substitute)
+    {
+        substitute.setHealth(substitute.getHealth() - CAUSALITY_HEALTH_COST);
+        restorePlayerHealth(player, CAUSALITY_HEALTH_COST);
+    }
+
+    private static void swapPlayerWithSubstitute(ServerPlayer player, LivingEntity substitute)
+    {
+        ensurePlayerSurvives(player);
+
+        if (!(substitute.level() instanceof ServerLevel substituteLevel))
+        {
+            LOGGER.warn("[Minefading] 因果替身不在服务端维度中，无法交换位置：{}", substitute.getUUID());
+            return;
+        }
+
+        ServerLevel playerLevel = player.serverLevel();
+        double playerX = player.getX();
+        double playerY = player.getY();
+        double playerZ = player.getZ();
+        float playerYRot = player.getYRot();
+        float playerXRot = player.getXRot();
+
+        double substituteX = substitute.getX();
+        double substituteY = substitute.getY();
+        double substituteZ = substitute.getZ();
+
+        Entity movedEntity = substitute;
+        if (substituteLevel != playerLevel)
+        {
+            Entity changed = substitute.changeDimension(playerLevel);
+            if (changed == null)
+            {
+                LOGGER.warn("[Minefading] 因果替身跨维度交换失败：{}", substitute.getUUID());
+                return;
+            }
+            movedEntity = changed;
+        }
+
+        player.teleportTo(substituteLevel, substituteX, substituteY, substituteZ, playerYRot, playerXRot);
+        movedEntity.teleportTo(playerX, playerY, playerZ);
+        syncCausalityCandidatePosition(movedEntity, player.server);
+    }
+
+    private static void ensurePlayerSurvives(ServerPlayer player)
+    {
+        player.setHealth(Math.max(1.0F, player.getHealth()));
+    }
+
+    private static void restorePlayerHealth(ServerPlayer player, float amount)
+    {
+        float baseHealth = Math.max(1.0F, player.getHealth());
+        player.setHealth(Math.min(player.getMaxHealth(), baseHealth + amount));
+    }
+
+    private static void syncCausalityCandidatePosition(Entity entity, MinecraftServer server)
+    {
+        if (causalityCandidate == null || !causalityCandidate.entityId().equals(entity.getUUID()))
+            return;
+
+        causalityCandidate = new CandidateLocation(
+                entity.getUUID(),
+                entity.level().dimension(),
+                entity.getX(),
+                entity.getY(),
+                entity.getZ()
+        );
+        saveCausalityCandidate(server);
     }
 
     // 由客户端 MinefadingKeybinds 每 tick 写入按键状态

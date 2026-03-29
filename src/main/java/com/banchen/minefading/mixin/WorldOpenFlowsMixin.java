@@ -15,9 +15,29 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(WorldOpenFlows.class)
 public class WorldOpenFlowsMixin
 {
-    // remap = false：Forge 运行时已将方法名映射为 official，Mixin 在映射后应用
-    @Inject(method = "loadLevel", at = @At("HEAD"), remap = false)
-    private void minefading$preEntryRestore(Screen lastScreen, String levelName, CallbackInfo ci)
+    @Inject(
+            method = "loadLevel(Lnet/minecraft/client/gui/screens/Screen;Ljava/lang/String;)V",
+            at = @At("HEAD"),
+            remap = false,
+            require = 0
+    )
+    private void minefading$preEntryRestoreOfficial(Screen lastScreen, String levelName, CallbackInfo ci)
+    {
+        minefading$preEntryRestore(levelName);
+    }
+
+    @Inject(
+            method = "m_233133_(Lnet/minecraft/client/gui/screens/Screen;Ljava/lang/String;)V",
+            at = @At("HEAD"),
+            remap = false,
+            require = 0
+    )
+    private void minefading$preEntryRestoreSrg(Screen lastScreen, String levelName, CallbackInfo ci)
+    {
+        minefading$preEntryRestore(levelName);
+    }
+
+    private void minefading$preEntryRestore(String levelName)
     {
         WorldRollbackManager.preEntryRestoreIfNeeded(levelName);
     }

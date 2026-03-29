@@ -352,7 +352,7 @@ public class WorldRollbackManager
                         srv.execute(() ->
                         {
                             applyRollbackCheckpointState(srv);
-                            if (!sheddingDeductScheduled)
+                            if (!sheddingDeductScheduled && hasPendingSheddingCost(srv))
                             {
                                 sheddingDeductScheduled = true;
                                 deductSheddingFromMarker(srv);
@@ -760,7 +760,7 @@ public class WorldRollbackManager
     }
 
     /**
-     * 在黑屏期间扣除蜕皮：读取标记文件，扣除 1 个蜕皮，然后删除标记。
+     * 在黑屏期间结算蜕皮使用：读取标记文件，扣除 1 个蜕皮并扣除吸入器 1 点耐久，然后删除标记。
      * 由 PENDING_RELOAD 在 playerReadyTicks==1 时通过 server.execute() 调度到服务端线程执行。
      */
     private static void deductSheddingFromMarker(MinecraftServer server)
@@ -780,27 +780,82 @@ public class WorldRollbackManager
             LOGGER.error("[Minefading] 清除蜕皮标记失败", e);
         }
 
-        // 扣除第一个玩家背包中的 1 个蜕皮（单人模式只有一个玩家）
+        // 扣除第一个玩家背包中的 1 个蜕皮，并补扣 1 点吸入器耐久（单人模式只有一个玩家）
         Item sheddingItem = RelicItems.SHEDDING.get();
+        Item inhalerItem = RelicItems.INHALER.get();
         for (ServerPlayer player : server.getPlayerList().getPlayers())
         {
-            for (int i = 0; i < player.getInventory().getContainerSize(); i++)
+            boolean sheddingDeducted = deductOneShedding(player, sheddingItem);
+            boolean inhalerDamaged = deductInhalerDurability(player, inhalerItem);
+
+            player.inventoryMenu.broadcastChanges();
+
+            if (!sheddingDeducted)
+                LOGGER.warn("[Minefading] 回档完成但未在玩家 {} 背包中找到蜕皮物品", player.getName().getString());
+            if (!inhalerDamaged)
+                LOGGER.warn("[Minefading] 回档完成但未在玩家 {} 背包中找到吸入器", player.getName().getString());
+
+            return;
+        }
+    }
+
+    private static boolean deductOneShedding(ServerPlayer player, Item sheddingItem)
+    {
+        for (int i = 0; i < player.getInventory().getContainerSize(); i++)
+        {
+            ItemStack stack = player.getInventory().getItem(i);
+            if (!stack.is(sheddingItem))
+                continue;
+
+            stack.shrink(1);
+            if (stack.isEmpty())
+                player.getInventory().setItem(i, ItemStack.EMPTY);
+
+            LOGGER.info("[Minefading] 已从玩家 {} 背包扣除 1 个蜕皮", player.getName().getString());
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean deductInhalerDurability(ServerPlayer player, Item inhalerItem)
+    {
+        ItemStack mainHand = player.getMainHandItem();
+        if (mainHand.is(inhalerItem) && damageInhaler(mainHand))
+        {
+            LOGGER.info("[Minefading] 已从玩家 {} 主手吸入器扣除 1 点耐久", player.getName().getString());
+            return true;
+        }
+
+        for (int i = 0; i < player.getInventory().getContainerSize(); i++)
+        {
+            ItemStack stack = player.getInventory().getItem(i);
+            if (!stack.is(inhalerItem) || stack == mainHand)
+                continue;
+
+            if (damageInhaler(stack))
             {
-                ItemStack stack = player.getInventory().getItem(i);
-                if (stack.is(sheddingItem))
-                {
-                    stack.shrink(1);
-                    if (stack.isEmpty())
-                    {
-                        player.getInventory().setItem(i, ItemStack.EMPTY);
-                    }
-                    player.inventoryMenu.broadcastChanges();
-                    LOGGER.info("[Minefading] 已从玩家 {} 背包扣除 1 个蜕皮", player.getName().getString());
-                    return;
-                }
+                if (stack.isEmpty())
+                    player.getInventory().setItem(i, ItemStack.EMPTY);
+
+                LOGGER.info("[Minefading] 已从玩家 {} 背包中的吸入器扣除 1 点耐久", player.getName().getString());
+                return true;
             }
         }
-        LOGGER.warn("[Minefading] 回档完成但未在任何玩家背包中找到蜕皮物品");
+        return false;
+    }
+
+    private static boolean damageInhaler(ItemStack stack)
+    {
+        if (!stack.isDamageableItem())
+            return false;
+
+        int nextDamage = stack.getDamageValue() + 1;
+        if (nextDamage >= stack.getMaxDamage())
+            stack.shrink(1);
+        else
+            stack.setDamageValue(nextDamage);
+
+        return true;
     }
 
     private static Path getSheddingMarkerPath(MinecraftServer server)
@@ -808,6 +863,11 @@ public class WorldRollbackManager
         Path worldRoot = server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
         Path snapshotsDir = getBackupRoot(worldRoot).getParent();
         return snapshotsDir.resolve(SHEDDING_PENDING_FILE);
+    }
+
+    private static boolean hasPendingSheddingCost(MinecraftServer server)
+    {
+        return Files.exists(getSheddingMarkerPath(server));
     }
 
     /**
@@ -924,6 +984,7 @@ public class WorldRollbackManager
     public static void applyPreEntryRollbackState(MinecraftServer server)
     {
         applyRollbackCheckpointState(server);
-        deductSheddingFromMarker(server);
+        if (hasPendingSheddingCost(server))
+            deductSheddingFromMarker(server);
     }
 }
