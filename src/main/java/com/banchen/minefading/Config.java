@@ -32,6 +32,11 @@ public class Config
             .comment("中央黑幕提示文字的缩放倍率。值越大，字体越大。")
             .defineInRange("overlayTextScale", 2.0D, 0.5D, 10.0D);
 
+    // 回溯黑幕动态文本的缩放倍率
+    private static final ForgeConfigSpec.DoubleValue ROLLBACK_TEXT_SCALE = BUILDER
+            .comment("回溯黑幕动态文本（回溯中...）的缩放倍率。值越大，字体越大。")
+            .defineInRange("rollbackTextScale", 1.8D, 0.5D, 10.0D);
+
     // 因果效果持续时长（秒）
     private static final ForgeConfigSpec.IntValue CAUSALITY_SECONDS = BUILDER
             .comment("因果效果的持续时长，单位为秒。")
@@ -69,6 +74,7 @@ public class Config
     public static int countdownDays;
     public static int overlayTicks; // 已转换为 tick 单位（秒 × 20）
     public static float overlayTextScale = 2.0F;
+        public static float rollbackTextScale = 1.8F;
     public static int causalityTicks = 20 * 20;
     public static int kronosTicks = 20 * 20;
     public static double kronosExtraWaitMaxMs = 55.0D;
@@ -83,6 +89,7 @@ public class Config
         countdownDays = COUNTDOWN_DAYS.get();
         overlayTicks = OVERLAY_SECONDS.get() * 20; // 秒转 tick
         overlayTextScale = OVERLAY_TEXT_SCALE.get().floatValue();
+        rollbackTextScale = ROLLBACK_TEXT_SCALE.get().floatValue();
         causalityTicks = CAUSALITY_SECONDS.get() * 20;
         kronosTicks = KRONOS_SECONDS.get() * 20;
         kronosExtraWaitMaxMs = KRONOS_EXTRA_WAIT_MAX_MS.get();

@@ -1,5 +1,6 @@
 package com.banchen.minefading.client;
 
+import com.banchen.minefading.Config;
 import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
@@ -52,6 +53,13 @@ public class BlackTransitionOverlay extends Overlay
         Minecraft mc = Minecraft.getInstance();
         int dots = (int) ((Util.getMillis() / 400L) % 4L);
         String text = ROLLBACK_TEXT.getString() + ".".repeat(dots);
-        graphics.drawCenteredString(mc.font, text, graphics.guiWidth() / 2, graphics.guiHeight() / 2 - 4, 0xFFFFFF);
+        float textScale = Math.max(0.1F, Config.rollbackTextScale);
+
+        graphics.pose().pushPose();
+        graphics.pose().scale(textScale, textScale, 1.0F);
+        int centerX = Math.round((graphics.guiWidth() / 2.0F) / textScale);
+        int centerY = Math.round((graphics.guiHeight() / 2.0F - 4.0F) / textScale);
+        graphics.drawCenteredString(mc.font, text, centerX, centerY, 0xFFFFFF);
+        graphics.pose().popPose();
     }
 }
