@@ -335,30 +335,6 @@ public class WorldRollbackManager
         }
     }
 
-    // 递归拷贝目录
-    private static void copyDirectory(Path src, Path dst) throws IOException
-    {
-        Files.walkFileTree(src, new SimpleFileVisitor<>()
-        {
-            @Override
-            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException
-            {
-                Files.createDirectories(dst.resolve(src.relativize(dir)));
-                return FileVisitResult.CONTINUE;
-            }
-
-            @Override
-            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException
-            {
-                // session.lock 由运行中的客户端独占，无法拷贝；还原时新客户端会重新创建它
-                if (file.getFileName().toString().equals("session.lock"))
-                    return FileVisitResult.CONTINUE;
-                Files.copy(file, dst.resolve(src.relativize(file)), StandardCopyOption.REPLACE_EXISTING);
-                return FileVisitResult.CONTINUE;
-            }
-        });
-    }
-
     /**
      * 启动后台索引预热：读取（或重建）当前世界快照索引，减少回档首帧等待。
      */
