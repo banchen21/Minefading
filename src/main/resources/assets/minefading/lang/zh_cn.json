@@ -41,5 +41,6 @@
   "effect.minefading.kronos_active": "柯罗诺斯",
   "key.categories.minefading": "Minefading",
   "key.minefading.kronos_slow": "柯罗诺斯：放缓时间",
+  "overlay.minefading.rollbacking": "回溯中",
   "itemGroup.minefading": "Minefading"
 }

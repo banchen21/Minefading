@@ -1,7 +1,10 @@
 package com.banchen.minefading.client;
 
+import net.minecraft.Util;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Overlay;
+import net.minecraft.network.chat.Component;
 
 /**
  * 回档重载期间的全黑 Overlay，用于覆盖原版世界加载动画。
@@ -12,6 +15,7 @@ import net.minecraft.client.gui.screens.Overlay;
  */
 public class BlackTransitionOverlay extends Overlay
 {
+    private static final Component ROLLBACK_TEXT = Component.translatable("overlay.minefading.rollbacking");
     private final Overlay wrapped;
 
     /** 独立黑幕（不包装其他 Overlay） */
@@ -43,5 +47,11 @@ public class BlackTransitionOverlay extends Overlay
         }
         // 然后用纯黑覆盖全屏
         graphics.fill(0, 0, graphics.guiWidth(), graphics.guiHeight(), 0xFF000000);
+
+        // 在黑幕中央显示动态文本：回溯中...（点数循环 0-3）
+        Minecraft mc = Minecraft.getInstance();
+        int dots = (int) ((Util.getMillis() / 400L) % 4L);
+        String text = ROLLBACK_TEXT.getString() + ".".repeat(dots);
+        graphics.drawCenteredString(mc.font, text, graphics.guiWidth() / 2, graphics.guiHeight() / 2 - 4, 0xFFFFFF);
     }
 }
