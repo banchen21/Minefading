@@ -258,8 +258,10 @@ public class DayStateData
     // 保存存档点：更新天数快照 + 记录追踪实体当前位置
     public void saveCheckpoint(MinecraftServer server, int worldDay)
     {
+        initializeIfNeeded(worldDay);
+        int previousCheckpointDisplayDay = checkpointDisplayDay;
         checkpointDisplayDay = Math.max(1, getDisplayedDay(worldDay));
-        rollbackDisplayDay = Math.max(1, checkpointDisplayDay);
+        rollbackDisplayDay = Math.max(1, previousCheckpointDisplayDay);
         snapshotTrackedEntities(server);
         persist();
     }
