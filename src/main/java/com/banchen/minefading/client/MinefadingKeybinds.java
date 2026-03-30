@@ -17,7 +17,7 @@ public class MinefadingKeybinds
     // 柯罗诺斯慢时间快捷键，默认绑定 Z 键
     public static final KeyMapping KRONOS_SLOW = new KeyMapping(
             "key.minefading.kronos_slow",
-            InputConstants.KEY_Z,
+            InputConstants.KEY_V,
             "key.categories.minefading"
     );
 
