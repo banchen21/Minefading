@@ -4,10 +4,12 @@ import com.banchen.minefading.Config;
 import com.banchen.minefading.Minefading;
 import com.banchen.minefading.WorldRollbackManager;
 import com.banchen.minefading.day.DayMode;
+import com.banchen.minefading.day.DayStateData;
 import com.banchen.minefading.relic.RelicGameplayEvents;
 import com.banchen.minefading.relic.RelicRuntime;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
+import net.minecraft.server.MinecraftServer;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.RenderGuiEvent;
 import net.minecraftforge.client.event.ScreenEvent;
@@ -100,11 +102,19 @@ public class ClientDayOverlay
             int y = height - 52;
             event.getGuiGraphics().drawString(minecraft.font, hudText, x, y, 0xFFFFFF, false);
 
+            int statusX = x + minecraft.font.width(hudText) + 4;
+
             // 因果激活时在天数文字右侧显示标识
-            if (minecraft.player != null && RelicRuntime.isCausalityActive(minecraft.player.getUUID()))
+            if (RelicRuntime.isCausalityActive(minecraft.player.getUUID()))
             {
-                int causalityX = x + minecraft.font.width(hudText) + 4;
-                event.getGuiGraphics().drawString(minecraft.font, "因果", causalityX, y, 0xFFD700, false);
+                event.getGuiGraphics().drawString(minecraft.font, "因果", statusX, y, 0xFFD700, false);
+                statusX += minecraft.font.width("因果") + 4;
+            }
+
+            MinecraftServer server = minecraft.getSingleplayerServer();
+            if (server != null && DayStateData.get(server).hasTrackedEntity())
+            {
+                event.getGuiGraphics().drawString(minecraft.font, "细沙", statusX, y, 0xE6D3A3, false);
             }
         }
 

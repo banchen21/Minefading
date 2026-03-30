@@ -3,6 +3,8 @@ package com.banchen.minefading;
 import com.banchen.minefading.client.BlackTransitionScreen;
 import com.banchen.minefading.day.DayStateData;
 import com.banchen.minefading.item.RelicItems;
+import com.banchen.minefading.relic.RelicGameplayEvents;
+import com.banchen.minefading.relic.RelicRuntime;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.server.MinecraftServer;
@@ -143,7 +145,21 @@ public class WorldRollbackManager
      */
     public static void takeSnapshot(MinecraftServer server)
     {
-        server.execute(() ->
+        takeSnapshot(server, false);
+    }
+
+    /**
+     * 创建世界快照，并阻塞直到文件拷贝完成。
+     * 用于像柯罗诺斯这种“必须先存档，再生效”的场景，避免后续状态被误写入回溯点。
+     */
+    public static void takeSnapshotBlocking(MinecraftServer server)
+    {
+        takeSnapshot(server, true);
+    }
+
+    private static void takeSnapshot(MinecraftServer server, boolean blocking)
+    {
+        Runnable snapshotTask = () ->
         {
             try
             {
@@ -158,7 +174,7 @@ public class WorldRollbackManager
                 beginSnapshotTask();
 
                 // 文件拷贝耗时较长，移至后台线程，避免阻塞客户端线程导致接下来的 clearLevel() 卡顿
-                SNAPSHOT_EXECUTOR.execute(() ->
+                Future<?> snapshotFuture = SNAPSHOT_EXECUTOR.submit(() ->
                 {
                     try
                     {
@@ -184,12 +200,34 @@ public class WorldRollbackManager
                         finishSnapshotTask();
                     }
                 });
+
+                if (blocking)
+                {
+                    try
+                    {
+                        snapshotFuture.get();
+                    }
+                    catch (InterruptedException e)
+                    {
+                        Thread.currentThread().interrupt();
+                        LOGGER.error("[Minefading] 同步世界快照被中断", e);
+                    }
+                    catch (ExecutionException e)
+                    {
+                        LOGGER.error("[Minefading] 同步世界快照失败", e);
+                    }
+                }
             }
             catch (Exception e)
             {
                 LOGGER.error("[Minefading] 世界快照保存失败", e);
             }
-        });
+        };
+
+        if (blocking)
+            server.executeBlocking(snapshotTask);
+        else
+            server.execute(snapshotTask);
     }
 
     // 将快照放到 saves 目录外：<gameDir>/minefading_snapshots/<levelId>/
@@ -218,6 +256,10 @@ public class WorldRollbackManager
             LOGGER.warn("[Minefading] 没有可用的世界快照，无法回档：{}", backupRootPath);
             return;
         }
+
+        // 回溯开始时立即取消柯罗诺斯的慢时状态，避免旧世界的静态状态卡住关服/重载流程。
+        RelicRuntime.cancelKronosForRestore();
+        RelicGameplayEvents.resetKronosSlowState();
 
         // 细沙要求“回溯时才把生物带到过去”，因此这里在真正断开并还原前
         // 抓取一次当前追踪实体的最新状态，而不是把整张世界快照往前推进。

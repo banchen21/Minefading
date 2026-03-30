@@ -219,6 +219,11 @@ public class DayStateData
         return rollbackDisplayDay;
     }
 
+    public boolean hasTrackedEntity()
+    {
+        return !trackedEntityIds.isEmpty();
+    }
+
     // 仅回退天数，不涉及实体
     public void rollbackToCheckpoint(int worldDay)
     {

@@ -33,6 +33,12 @@ public class RelicGameplayEvents
     /** 返回当前时缓强度 (0.0 = 无, 1.0 = 最大)，客户端渲染用 */
     public static double getKronosSlowFactor() { return kronosSlowFactor; }
 
+    public static void resetKronosSlowState()
+    {
+        wasSlowActive = false;
+        kronosSlowFactor = 0.0D;
+    }
+
     // 每客户端 tick 结束时驱动药芯效果计时器
     @SubscribeEvent
     public static void onServerTick(TickEvent.ServerTickEvent event)
@@ -154,7 +160,7 @@ public class RelicGameplayEvents
             return;
 
         if (RelicRuntime.tryHandleCausalityLethalDamage(player))
-            event.setCanceled(true);
+            event.setCanceled(false);
     }
 
     // 玩家复活时检查是否需要锁定为旁观者（高塔/倒计时极限死亡后）
