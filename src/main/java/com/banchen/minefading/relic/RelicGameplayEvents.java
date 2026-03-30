@@ -160,7 +160,7 @@ public class RelicGameplayEvents
             return;
 
         if (RelicRuntime.tryHandleCausalityLethalDamage(player))
-            event.setCanceled(false);
+            event.setCanceled(true);
     }
 
     // 玩家复活时检查是否需要锁定为旁观者（高塔/倒计时极限死亡后）

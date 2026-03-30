@@ -293,10 +293,10 @@ public class RelicRuntime {
             movedEntity = changed;
         }
 
-        player.teleportTo(substituteLevel, substituteX, substituteY, substituteZ, playerYRot, playerXRot);
         movedEntity.teleportTo(playerX, playerY, playerZ);
-        clearCausalityBindingState(movedEntity);
         movedEntity.kill();
+        player.teleportTo(substituteLevel, substituteX, substituteY, substituteZ, playerYRot, playerXRot);
+        clearCausalityBindingState(movedEntity);
         return true;
     }
 
