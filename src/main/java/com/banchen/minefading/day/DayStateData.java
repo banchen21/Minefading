@@ -186,12 +186,20 @@ public class DayStateData
         persist();
     }
 
-    // 世界天数变化时调用：更新记录并返回"是否刚过了一天"
+    // 世界天数前进时调用：仅当真实天数增加时返回"是否刚过了一天"。
+    // 若天数回退（例如回溯/预还原），只同步状态，不应被判定为新的一天。
     public boolean updateForWorldDay(int worldDay)
     {
         initializeIfNeeded(worldDay);
         if (worldDay == lastWorldDay)
             return false;
+
+        if (worldDay < lastWorldDay)
+        {
+            lastWorldDay = worldDay;
+            persist();
+            return false;
+        }
 
         lastWorldDay = worldDay;
         rollbackDisplayDay = Math.max(1, checkpointDisplayDay); // 前一天的检查点成为回滚目标

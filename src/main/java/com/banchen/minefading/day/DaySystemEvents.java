@@ -111,6 +111,7 @@ public class DaySystemEvents
                 // 世界加载前已完成快照文件还原，现在应用回档状态（天数偏移、追踪实体、蜕皮扣除）
                 final MinecraftServer srv = server;
                 srv.execute(() -> WorldRollbackManager.applyPreEntryRollbackState(srv));
+                return;
             }
             else if (!WorldRollbackManager.consumeSkipAutoEntryCheck(server))
             {
