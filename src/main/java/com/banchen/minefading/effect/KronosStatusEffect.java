@@ -8,7 +8,7 @@ public class KronosStatusEffect extends MobEffect
 {
     protected KronosStatusEffect()
     {
-        super(MobEffectCategory.BENEFICIAL, 0xD28B1E);
+        super(MobEffectCategory.BENEFICIAL, 0x6FA8FF);
     }
 
     @Override

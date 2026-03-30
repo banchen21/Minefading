@@ -6,15 +6,11 @@ import com.mojang.logging.LogUtils;
 import net.minecraft.Util;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.item.Items;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.GameType;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.living.LivingDamageEvent;
 import net.minecraftforge.event.entity.living.LivingDeathEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
-import net.minecraftforge.event.entity.player.PlayerInteractEvent;
 import net.minecraftforge.event.server.ServerStartingEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
@@ -187,22 +183,5 @@ public class RelicGameplayEvents
                 true
             );
         }
-    }
-
-    // 玩家用命名牌命名实体时记录因果替身候选，解决远距离实体未加载的问题
-    @SubscribeEvent
-    public static void onEntityInteract(PlayerInteractEvent.EntityInteract event)
-    {
-        if (!(event.getEntity() instanceof ServerPlayer player))
-            return;
-        if (!(event.getTarget() instanceof LivingEntity target))
-            return;
-
-        ItemStack held = player.getItemInHand(event.getHand());
-        if (!held.is(Items.NAME_TAG) || !held.hasCustomHoverName())
-            return;
-
-        String newName = held.getHoverName().getString();
-        RelicRuntime.onEntityNamed(player, target, newName);
     }
 }

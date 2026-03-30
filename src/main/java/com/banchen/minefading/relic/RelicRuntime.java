@@ -18,6 +18,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.storage.LevelResource;
@@ -42,6 +43,9 @@ public class RelicRuntime
     private static final Gson GSON = new Gson();
     private static final String SPECTATOR_LOCK_FILE = "spectator_locked.json";
     private static final String CAUSALITY_CANDIDATE_FILE = "causality_candidate.json";
+    private static final String FINE_SAND_MARK_KEY = Minefading.MODID + ".fine_sand_marked";
+    private static final String CAUSALITY_MARK_KEY = Minefading.MODID + ".causality_marked";
+    private static final String CAUSALITY_OWNER_KEY = Minefading.MODID + ".causality_owner";
     private static final float CAUSALITY_HEALTH_COST = 20.0F;
     private static final int CAUSALITY_RECOVERY_TICKS = 20;
     // 当前激活因果效果的玩家及其剩余 tick 数
@@ -57,7 +61,7 @@ public class RelicRuntime
     // 已被锁定为旁观者、不得切换回其他模式的玩家
     private static final Set<UUID> spectatorLocked = ConcurrentHashMap.newKeySet();
 
-    // 因果替身候选记录（只保留最后一个命名的实体），持久化到文件
+    // 因果替身候选记录（只保留最后一次绑定的实体），持久化到文件
     private record CandidateLocation(UUID entityId, ResourceKey<Level> dimension, double x, double y, double z) {}
     private static volatile CandidateLocation causalityCandidate = null;
 
@@ -77,8 +81,8 @@ public class RelicRuntime
             case DISCONNECT -> createCheckpoint(player, "message.minefading.disconnect_saved");
             // 高塔：主动死亡
             case TOWER -> killPlayer(player, "message.minefading.tower_selected");
-            // 因果：激活替身保护
-            case CAUSALITY -> activateCausality(player);
+            // 因果：需对生物定向使用，不响应空放
+            case CAUSALITY -> false;
             // 柯罗诺斯：按键放缓时间
             case CHRONOS -> activateKronos(player);
         };
@@ -107,14 +111,59 @@ public class RelicRuntime
         return true;
     }
 
-    // 细沙：将目标实体加入追踪，保存其完整NBT；真正回溯时再把它带到过去
-    public static void trackEntity(ServerPlayer player, LivingEntity entity)
+    // 细沙：将目标实体标记并加入追踪，真正回溯时再把它带到过去
+    public static boolean trackEntity(ServerPlayer player, LivingEntity entity)
     {
+        if (entity instanceof net.minecraft.world.entity.player.Player)
+        {
+            player.displayClientMessage(Component.translatable("message.minefading.fine_sand_requires_non_player"), true);
+            return false;
+        }
+
         MinecraftServer server = player.server;
         DayStateData data = DayStateData.get(server);
 
+        markEntityForTracking(entity, FINE_SAND_MARK_KEY);
+
         data.trackEntity(entity.getUUID(), entity, server); // 保存UUID、NBT和维度信息
         player.displayClientMessage(Component.translatable("message.minefading.fine_sand_recorded"), true);
+        return true;
+    }
+
+    // 因果：对目标实体施加发光/命名/持久化标记，并立即激活替身效果
+    public static boolean bindCausalityTarget(ServerPlayer player, LivingEntity entity)
+    {
+        if (!WorldRollbackManager.hasSnapshot(player.server))
+        {
+            player.displayClientMessage(Component.translatable("message.minefading.causality_requires_snapshot"), true);
+            return false;
+        }
+        if (entity instanceof net.minecraft.world.entity.player.Player)
+        {
+            player.displayClientMessage(Component.translatable("message.minefading.causality_requires_non_player"), true);
+            return false;
+        }
+        if (entity.getMaxHealth() <= 20.0F)
+        {
+            player.displayClientMessage(Component.translatable("message.minefading.causality_requires_healthy_target"), true);
+            return false;
+        }
+
+        markEntityForTracking(entity, CAUSALITY_MARK_KEY);
+        entity.getPersistentData().putUUID(CAUSALITY_OWNER_KEY, player.getUUID());
+        entity.setCustomName(player.getName().copy());
+
+        causalityCandidate = new CandidateLocation(
+                entity.getUUID(),
+                entity.level().dimension(),
+                entity.getX(),
+                entity.getY(),
+                entity.getZ()
+        );
+        saveCausalityCandidate(player.server);
+        causalityActiveTicks.put(player.getUUID(), Config.causalityTicks);
+        player.displayClientMessage(Component.translatable("message.minefading.causality_activated"), true);
+        return true;
     }
 
     // 每客户端 tick 调用：倒计时效果、柯罗诺斯放缓时间、结束后存档
@@ -152,11 +201,13 @@ public class RelicRuntime
         if (substitute == null)
             return false;
 
+        clearCausalityBindingState(substitute);
         if (substitute.getHealth() > CAUSALITY_HEALTH_COST)
             applyCausalityHealthTransfer(player, substitute);
         else
             swapPlayerWithSubstitute(player, substitute);
 
+        clearCausalityCandidate(player.server);
         player.displayClientMessage(Component.translatable("message.minefading.causality_triggered"), true);
         causalityActiveTicks.remove(playerId);
         causalityRecoveryTicks.put(playerId, CAUSALITY_RECOVERY_TICKS);
@@ -183,6 +234,31 @@ public class RelicRuntime
     public static boolean canCausalityPreventDeath(ServerPlayer player)
     {
         return wouldCausalityPreventLethalDamage(player);
+    }
+
+    private static void markEntityForTracking(LivingEntity entity, String markKey)
+    {
+        entity.setGlowingTag(true);
+        entity.getPersistentData().putBoolean(markKey, true);
+        if (entity instanceof Mob mob)
+            mob.setPersistenceRequired();
+    }
+
+    public static void clearFineSandTrackingState(Entity entity)
+    {
+        clearEntityTrackingState(entity, FINE_SAND_MARK_KEY);
+    }
+
+    private static void clearCausalityBindingState(Entity entity)
+    {
+        clearEntityTrackingState(entity, CAUSALITY_MARK_KEY);
+        entity.getPersistentData().remove(CAUSALITY_OWNER_KEY);
+    }
+
+    private static void clearEntityTrackingState(Entity entity, String markKey)
+    {
+        entity.setGlowingTag(false);
+        entity.getPersistentData().remove(markKey);
     }
 
     private static void applyCausalityHealthTransfer(ServerPlayer player, LivingEntity substitute)
@@ -265,23 +341,6 @@ public class RelicRuntime
     public static boolean isKronosSlowActive()
     {
         return slowTimeKeyDown && !kronosActiveTicks.isEmpty();
-    }
-
-    
-
-    
-
-    private static boolean activateCausality(ServerPlayer player)
-    {
-        if (!WorldRollbackManager.hasSnapshot(player.server))
-        {
-            player.displayClientMessage(Component.translatable("message.minefading.causality_requires_snapshot"), true);
-            return false;
-        }
-
-        causalityActiveTicks.put(player.getUUID(), Config.causalityTicks);
-        player.displayClientMessage(Component.translatable("message.minefading.causality_activated"), true);
-        return true;
     }
 
     private static boolean activateKronos(ServerPlayer player)
@@ -395,97 +454,80 @@ public class RelicRuntime
         }
     }
 
-    // 在所有维度中寻找因果替身：与玩家同名、有自定义名称、最大生命值大于 20 的生物
+    // 查找当前绑定的因果替身；若实体未加载则按上次位置补加载对应区块
     private static LivingEntity findCausalitySubstitute(ServerPlayer player)
     {
-        String expectedName = player.getName().getString();
         MinecraftServer server = player.server;
-
-        // 1. 优先在已加载实体中查找
-        for (ServerLevel level : server.getAllLevels())
-        {
-            for (Entity entity : level.getAllEntities())
-            {
-                if (matchesCausalitySubstitute(entity, player, expectedName))
-                    return (LivingEntity) entity;
-            }
-        }
-
-        // 2. 已加载实体未找到，尝试通过候选记录加载区块
         CandidateLocation loc = causalityCandidate;
         if (loc == null)
             return null;
 
-        ServerLevel level = server.getLevel(loc.dimension());
-        if (level == null)
-            return null;
-
-        // 强制加载实体所在区块
-        ChunkPos chunkPos = new ChunkPos((int) loc.x() >> 4, (int) loc.z() >> 4);
-        level.getChunk(chunkPos.x, chunkPos.z);
-
-        Entity entity = level.getEntity(loc.entityId());
+        Entity entity = findEntity(server, loc.entityId());
         if (entity == null)
         {
-            causalityCandidate = null;
-            saveCausalityCandidate(server);
+            ServerLevel level = server.getLevel(loc.dimension());
+            if (level == null)
+                return null;
+
+            ChunkPos chunkPos = new ChunkPos((int) loc.x() >> 4, (int) loc.z() >> 4);
+            level.getChunk(chunkPos.x, chunkPos.z);
+            entity = level.getEntity(loc.entityId());
+        }
+
+        if (entity == null)
+        {
+            clearCausalityCandidate(server);
             return null;
         }
 
-        if (matchesCausalitySubstitute(entity, player, expectedName))
+        if (matchesCausalitySubstitute(entity, player))
         {
-            // 更新位置（实体可能已移动）
             causalityCandidate = new CandidateLocation(
-                    loc.entityId(), level.dimension(), entity.getX(), entity.getY(), entity.getZ());
+                    loc.entityId(), entity.level().dimension(), entity.getX(), entity.getY(), entity.getZ());
             saveCausalityCandidate(server);
             return (LivingEntity) entity;
         }
-        else
-        {
-            // 实体已不符合条件（被改名或死亡），清除候选
-            causalityCandidate = null;
-            saveCausalityCandidate(server);
-            return null;
-        }
+
+        clearCausalityCandidate(server);
+        return null;
     }
 
-    // 检查实体是否符合因果替身条件
-    private static boolean matchesCausalitySubstitute(Entity entity, ServerPlayer player, String expectedName)
+    private static void clearCausalityCandidate(MinecraftServer server)
+    {
+        causalityCandidate = null;
+        saveCausalityCandidate(server);
+    }
+
+    // 检查实体是否仍符合因果替身条件
+    private static boolean matchesCausalitySubstitute(Entity entity, ServerPlayer player)
     {
         if (!(entity instanceof LivingEntity living))
             return false;
         if (living == player)
             return false;
+        if (living instanceof net.minecraft.world.entity.player.Player)
+            return false;
         if (!living.hasCustomName())
             return false;
-        if (!expectedName.equals(living.getCustomName().getString()))
+        if (!player.getName().getString().equals(living.getCustomName().getString()))
             return false;
-        return living.getMaxHealth() > 20.0F;
+        if (living.getMaxHealth() <= 20.0F)
+            return false;
+        if (!living.getPersistentData().getBoolean(CAUSALITY_MARK_KEY))
+            return false;
+        return living.getPersistentData().hasUUID(CAUSALITY_OWNER_KEY)
+                && player.getUUID().equals(living.getPersistentData().getUUID(CAUSALITY_OWNER_KEY));
     }
 
-    /**
-     * 当玩家用命名牌命名实体时调用：如果实体符合因果替身条件就记录为唯一候选。
-     * 多次命名以最后一次为准。由 RelicGameplayEvents.onEntityInteract 触发。
-     */
-    public static void onEntityNamed(ServerPlayer player, LivingEntity entity, String newName)
+    private static Entity findEntity(MinecraftServer server, UUID id)
     {
-        String playerName = player.getName().getString();
-        if (playerName.equals(newName) && entity.getMaxHealth() > 20.0F)
+        for (ServerLevel level : server.getAllLevels())
         {
-            ResourceKey<Level> dim = entity.level().dimension();
-            causalityCandidate = new CandidateLocation(
-                    entity.getUUID(), dim, entity.getX(), entity.getY(), entity.getZ());
-            saveCausalityCandidate(player.server);
-            LOGGER.info("[Minefading] 已记录因果替身候选：{} (UUID={}) 位于 {}({}, {}, {})",
-                    newName, entity.getUUID(), dim.location(),
-                    (int) entity.getX(), (int) entity.getY(), (int) entity.getZ());
+            Entity entity = level.getEntity(id);
+            if (entity != null)
+                return entity;
         }
-        else if (causalityCandidate != null && causalityCandidate.entityId().equals(entity.getUUID()))
-        {
-            // 原来的候选被改了名字，不再符合条件
-            causalityCandidate = null;
-            saveCausalityCandidate(player.server);
-        }
+        return null;
     }
 
     // 从文件加载因果替身候选（服务端启动时调用）

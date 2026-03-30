@@ -15,47 +15,65 @@ import net.minecraft.world.level.Level;
 import javax.annotation.Nullable;
 import java.util.List;
 
-// 细沙：右键有自定义名称的生物，将其注册为追踪目标（回档时会被传送回位置）
-public class FineSandItem extends Item
-{
-    public FineSandItem()
-    {
+// 细沙：右键生物后为其附加标记并记录完整 NBT，回溯时把该生物带回过去
+public class FineSandItem extends Item {
+    public FineSandItem() {
         super(new Properties().stacksTo(16));
     }
 
-    // 右键攻击生物时触发，检查是否有自定义名称
+    // 右键生物时触发，要求主手吸入器 + 副手细沙
     @Override
-    public InteractionResult interactLivingEntity(ItemStack stack, net.minecraft.world.entity.player.Player player, LivingEntity interactionTarget, InteractionHand usedHand)
-    {
+    public InteractionResult interactLivingEntity(ItemStack stack, net.minecraft.world.entity.player.Player player,
+            LivingEntity interactionTarget, InteractionHand usedHand) {
         if (player.level().isClientSide)
             return InteractionResult.SUCCESS;
 
         if (!(player instanceof ServerPlayer serverPlayer))
             return InteractionResult.PASS;
 
-        if (usedHand != InteractionHand.OFF_HAND || player.getMainHandItem().getItem() != RelicItems.INHALER.get())
-        {
-            serverPlayer.displayClientMessage(Component.translatable("message.minefading.use_fine_sand_with_inhaler"), true);
-            return InteractionResult.PASS;
+        if (usedHand != InteractionHand.OFF_HAND || player.getMainHandItem().getItem() != RelicItems.INHALER.get()) {
+            serverPlayer.displayClientMessage(Component.translatable("message.minefading.use_fine_sand_with_inhaler"),
+                    true);
+            return InteractionResult.CONSUME;
         }
 
-        // 只允许追踪有命名的生物（用于叙事目标角色）
-        if (!interactionTarget.hasCustomName())
-        {
-            serverPlayer.displayClientMessage(Component.translatable("message.minefading.fine_sand_requires_named"), true);
-            return InteractionResult.PASS;
+        if (RelicRuntime.trackEntity(serverPlayer, interactionTarget)) {
+            player.getMainHandItem().hurtAndBreak(1, serverPlayer,
+                    brokenPlayer -> brokenPlayer.broadcastBreakEvent(InteractionHand.MAIN_HAND));
+            stack.shrink(1);
         }
-
-        RelicRuntime.trackEntity(serverPlayer, interactionTarget);
-        player.getMainHandItem().hurtAndBreak(1, serverPlayer, brokenPlayer -> brokenPlayer.broadcastBreakEvent(InteractionHand.MAIN_HAND));
-        stack.shrink(1);
         return InteractionResult.CONSUME;
     }
 
     @Override
-    public void appendHoverText(ItemStack stack, @Nullable Level level, List<Component> tooltip, TooltipFlag flag)
-    {
-        tooltip.add(Component.translatable("item.minefading.fine_sand.func").withStyle(ChatFormatting.WHITE));
-        tooltip.add(Component.translatable("item.minefading.fine_sand.desc").withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC));
+    public void appendHoverText(ItemStack stack, @Nullable Level level, List<Component> tooltip, TooltipFlag flag) {
+        // 物品类型标签
+        tooltip.add(Component.translatable("item.minefading.fine_sand.type")
+                .withStyle(ChatFormatting.DARK_GRAY, ChatFormatting.BOLD));
+
+        // 空行
+        tooltip.add(Component.empty());
+
+        // 效果标题 + 内容
+        tooltip.add(Component.translatable("tooltip.minefading.effect.title")
+                .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD));
+        tooltip.add(Component.literal("  ")
+                .append(Component.translatable("item.minefading.fine_sand.func"))
+                .withStyle(ChatFormatting.WHITE));
+
+        // 空行
+        tooltip.add(Component.empty());
+
+        // 描述标题 + 内容
+        tooltip.add(Component.translatable("tooltip.minefading.desc.title")
+                .withStyle(ChatFormatting.DARK_AQUA, ChatFormatting.BOLD));
+        tooltip.add(Component.literal("  \"")
+                .append(Component.translatable("item.minefading.fine_sand.desc"))
+                .append(Component.literal("\""))
+                .withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC));
+
+        // 底部装饰
+        tooltip.add(Component.translatable("tooltip.minefading.bottom_decoration")
+                .withStyle(ChatFormatting.DARK_GRAY));
     }
 }

@@ -24,12 +24,12 @@ public class RelicItems
     // 高塔：主动死亡（并清空当前回溯点）
     public static final RegistryObject<Item> TOWER     = ITEMS.register("tower",
             () -> new RelicItem(RelicAction.TOWER,     "item.minefading.tower.desc"));
-    // 细沙：对命名生物记录追踪信息，回溯时带回
+    // 细沙：对目标生物附加标记并记录追踪信息，回溯时带回
     public static final RegistryObject<Item> FINE_SAND = ITEMS.register("fine_sand",
             FineSandItem::new); // 细沙有独立的交互逻辑，使用专属类
-    // 因果：替身代死并传送到替身位置
+    // 因果：对目标生物绑定代死效果
     public static final RegistryObject<Item> CAUSALITY = ITEMS.register("causality",
-            () -> new RelicItem(RelicAction.CAUSALITY, "item.minefading.causality.desc"));
+            CausalityItem::new);
     // 柯罗诺斯：慢时并在前后自动存档
     public static final RegistryObject<Item> KRONOS    = ITEMS.register("kronos",
             () -> new RelicItem(RelicAction.CHRONOS,   "item.minefading.kronos.desc"));

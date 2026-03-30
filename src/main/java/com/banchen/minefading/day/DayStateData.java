@@ -1,6 +1,7 @@
 package com.banchen.minefading.day;
 
 import com.banchen.minefading.Minefading;
+import com.banchen.minefading.relic.RelicRuntime;
 import com.banchen.minefading.relic.TrackedEntityManager;
 import com.mojang.logging.LogUtils;
 import net.minecraft.nbt.CompoundTag;
@@ -270,6 +271,21 @@ public class DayStateData
     {
         try
         {
+            // 细沙一次只保留最后一次记录的目标；旧目标若仍已加载，则移除其发光标记。
+            for (UUID trackedId : trackedEntityIds.toArray(UUID[]::new))
+            {
+                if (trackedId.equals(entityId))
+                    continue;
+
+                Entity trackedEntity = findEntity(server, trackedId);
+                if (trackedEntity != null)
+                    RelicRuntime.clearFineSandTrackingState(trackedEntity);
+
+                trackedEntityIds.remove(trackedId);
+                trackedSnapshots.remove(trackedId);
+                entityManager.removeEntity(trackedId);
+            }
+
             trackedEntityIds.add(entityId);
             entityManager.cacheEntity(entityId, entity);
             entityManager.flushToFile(server);
@@ -344,13 +360,14 @@ public class DayStateData
             if (restoredEntity.level() != targetLevel)
             {
                 Entity changed = restoredEntity.changeDimension(targetLevel);
-                if (changed != null)
-                    summonEntity = changed;
-            }
-
-            summonEntity.teleportTo(anchorPlayer.getX(), anchorPlayer.getY(), anchorPlayer.getZ());
-            consumedIds.add(entityId);
+            if (changed != null)
+                summonEntity = changed;
         }
+
+        summonEntity.teleportTo(anchorPlayer.getX(), anchorPlayer.getY(), anchorPlayer.getZ());
+        RelicRuntime.clearFineSandTrackingState(summonEntity);
+        consumedIds.add(entityId);
+    }
 
         if (consumedIds.isEmpty())
             return;

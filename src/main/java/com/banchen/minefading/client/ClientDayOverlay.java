@@ -120,7 +120,7 @@ public class ClientDayOverlay
         {
             int alpha = (int) (kronosOverlayAlpha * 40); // 最大 alpha 约 40/255
             if (alpha > 0)
-                event.getGuiGraphics().fill(0, 0, width, height, (alpha << 24) | 0xFFD700);
+                event.getGuiGraphics().fill(0, 0, width, height, (alpha << 24) | 0x6FA8FF);
         }
     }
 

@@ -24,6 +24,8 @@ public class InhalerItem extends RelicItem
         ItemStack offhand = player.getOffhandItem();
         if (offhand.getItem() instanceof FineSandItem fineSandItem)
             return fineSandItem.interactLivingEntity(offhand, player, interactionTarget, InteractionHand.OFF_HAND);
+        if (offhand.getItem() instanceof CausalityItem causalityItem)
+            return causalityItem.interactLivingEntity(offhand, player, interactionTarget, InteractionHand.OFF_HAND);
 
         return InteractionResult.PASS;
     }
