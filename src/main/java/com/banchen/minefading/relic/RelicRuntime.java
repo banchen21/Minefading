@@ -309,19 +309,6 @@ public class RelicRuntime {
         player.setHealth(Math.min(player.getMaxHealth(), baseHealth + amount));
     }
 
-    private static void syncCausalityCandidatePosition(Entity entity, MinecraftServer server) {
-        if (causalityCandidate == null || !causalityCandidate.entityId().equals(entity.getUUID()))
-            return;
-
-        causalityCandidate = new CandidateLocation(
-                entity.getUUID(),
-                entity.level().dimension(),
-                entity.getX(),
-                entity.getY(),
-                entity.getZ());
-        saveCausalityCandidate(server);
-    }
-
     // 由客户端 MinefadingKeybinds 每 tick 写入按键状态
     public static void setSlowTimeKeyDown(boolean keyDown) {
         slowTimeKeyDown = keyDown;
