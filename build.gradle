@@ -150,7 +150,10 @@ dependencies {
     compileOnly fg.deobf("local:yet_another_config_lib_v3:3.6.6+1.20.1-forge")
     runtimeOnly fg.deobf("local:yet_another_config_lib_v3:3.6.6+1.20.1-forge")
 
-    
+
+    // TACZ - 开发环境依赖
+    compileOnly fg.deobf("local:tacz:1.20.1-1.1.7-hotfix2")
+    runtimeOnly fg.deobf("local:tacz:1.20.1-1.1.7-hotfix2")
 }
 
 def mixinRefmapFile = layout.buildDirectory.file("tmp/compileJava/${mod_id}.refmap.json")
