@@ -300,6 +300,7 @@ public class RelicRuntime {
     private static boolean activateKronos(ServerPlayer player) {
         // 时缓核心已移除：柯罗诺斯仅保留“立即存档”语义
         createCheckpoint(player, "message.minefading.kronos_saved_before_start", true);
+        player.addEffect(new MobEffectInstance(ModEffects.KRONOS_ACTIVE.get(), Config.kronosTicks, 0, false, true, true));
         return true;
     }
 

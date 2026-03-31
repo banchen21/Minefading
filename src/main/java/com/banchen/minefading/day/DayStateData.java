@@ -23,6 +23,8 @@ import org.slf4j.Logger;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.HashMap;
@@ -37,6 +39,7 @@ public class DayStateData
 {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final String DATA_FILE_NAME = "day_state.dat";
+    private static final String WORLD_ID_FILE_NAME = "world_identity.txt";
     private static final Map<String, DayStateData> CACHE = new ConcurrentHashMap<>();
 
     // 显示天数 = 世界天数 + offsetDays，用于回档后保持天数显示不跳变
@@ -57,12 +60,16 @@ public class DayStateData
     private boolean entityManagerInitialized = false;
     // 当前世界对应的数据文件路径（位于 config/minefading/data/day_state/<levelId>/day_state.dat）
     private transient Path storageFile;
+    // 关联到该 day_state 的世界唯一标识，用于防止同名新世界复用旧状态
+    private String worldIdentity = "";
 
     // 从外部文件中获取或创建 DayStateData 实例（按世界 ID 缓存）
     public static DayStateData get(MinecraftServer server)
     {
         String levelId = getLevelId(server);
-        return CACHE.computeIfAbsent(levelId, id -> loadFromExternal(server, id));
+        DayStateData data = CACHE.computeIfAbsent(levelId, id -> loadFromExternal(server, id));
+        data.synchronizeWorldIdentity(server);
+        return data;
     }
 
     private static DayStateData loadFromExternal(MinecraftServer server, String levelId)
@@ -97,6 +104,7 @@ public class DayStateData
         data.rollbackDisplayDay = Math.max(1, tag.getInt("RollbackDisplayDay"));
         data.checkpointDisplayDay = Math.max(1, tag.getInt("CheckpointDisplayDay"));
         data.lastWorldDay = tag.getInt("LastWorldDay");
+        data.worldIdentity = tag.getString("WorldIdentity");
 
         ListTag tracked = tag.getList("TrackedEntityIds", Tag.TAG_INT_ARRAY);
         for (Tag entry : tracked)
@@ -119,6 +127,7 @@ public class DayStateData
         tag.putInt("RollbackDisplayDay", rollbackDisplayDay);
         tag.putInt("CheckpointDisplayDay", checkpointDisplayDay);
         tag.putInt("LastWorldDay", lastWorldDay);
+        tag.putString("WorldIdentity", worldIdentity == null ? "" : worldIdentity);
 
         ListTag tracked = new ListTag();
         for (UUID id : trackedEntityIds)
@@ -155,6 +164,68 @@ public class DayStateData
 
         Path dataDir = gameDir.resolve("config").resolve(Minefading.MODID).resolve("data").resolve("day_state").resolve(levelId);
         return dataDir.resolve(DATA_FILE_NAME);
+    }
+
+    private static Path resolveWorldIdentityFile(MinecraftServer server)
+    {
+        Path worldRoot = server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
+        return worldRoot.resolve("data").resolve(Minefading.MODID).resolve(WORLD_ID_FILE_NAME);
+    }
+
+    private static String readOrCreateWorldIdentity(MinecraftServer server)
+    {
+        Path identityFile = resolveWorldIdentityFile(server);
+        try
+        {
+            if (Files.isRegularFile(identityFile))
+            {
+                String value = Files.readString(identityFile, StandardCharsets.UTF_8).trim();
+                if (!value.isEmpty())
+                    return value;
+            }
+
+            String created = UUID.randomUUID().toString();
+            Files.createDirectories(identityFile.getParent());
+            Files.writeString(identityFile, created, StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            return created;
+        }
+        catch (IOException e)
+        {
+            LOGGER.error("[Minefading] 读取/写入世界标识失败：{}", identityFile, e);
+            return "fallback:" + server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
+        }
+    }
+
+    private void synchronizeWorldIdentity(MinecraftServer server)
+    {
+        String currentIdentity = readOrCreateWorldIdentity(server);
+        if (worldIdentity == null || worldIdentity.isEmpty())
+        {
+            worldIdentity = currentIdentity;
+            persist();
+            return;
+        }
+
+        if (worldIdentity.equals(currentIdentity))
+            return;
+
+        LOGGER.warn("[Minefading] 检测到同名新世界，重置旧天数状态。levelId={}, oldId={}, newId={}",
+                getLevelId(server), worldIdentity, currentIdentity);
+
+        worldIdentity = currentIdentity;
+        resetAllStateToDayOne();
+        persist();
+    }
+
+    private void resetAllStateToDayOne()
+    {
+        offsetDays = 0;
+        rollbackDisplayDay = 1;
+        checkpointDisplayDay = 1;
+        lastWorldDay = -1;
+        trackedEntityIds.clear();
+        trackedSnapshots.clear();
     }
 
     private void persist()
@@ -217,6 +288,27 @@ public class DayStateData
     public int getRollbackDisplayDay()
     {
         return rollbackDisplayDay;
+    }
+
+    // 若为疑似“全新世界”但命中了旧存档名导致复用到历史 day_state，
+    // 则将天数状态重置到第一天，避免新存档开局天数异常。
+    public boolean resetForLikelyFreshWorld(int worldDay)
+    {
+        if (worldDay != 1)
+            return false;
+
+        int displayedDay = getDisplayedDay(worldDay);
+        if (displayedDay == 1 && checkpointDisplayDay == 1 && rollbackDisplayDay == 1)
+            return false;
+
+        offsetDays = 0;
+        lastWorldDay = 1;
+        checkpointDisplayDay = 1;
+        rollbackDisplayDay = 1;
+        trackedEntityIds.clear();
+        trackedSnapshots.clear();
+        persist();
+        return true;
     }
 
     public boolean hasTrackedEntity()

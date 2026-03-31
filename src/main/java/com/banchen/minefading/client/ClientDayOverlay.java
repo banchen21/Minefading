@@ -127,9 +127,88 @@ public class ClientDayOverlay
 
         if (kronosOverlayAlpha > 0.001F)
         {
-            int alpha = (int) (kronosOverlayAlpha * 40); // 最大 alpha 约 40/255
-            if (alpha > 0)
-                event.getGuiGraphics().fill(0, 0, width, height, (alpha << 24) | 0x6FA8FF);
+            int maxAlpha = (int) (kronosOverlayAlpha * 130); // 边缘最大 alpha（加强）
+            if (maxAlpha > 0)
+                renderKronosEllipticalMist(event.getGuiGraphics(), width, height, maxAlpha, kronosOverlayAlpha);
+        }
+    }
+
+    private static void renderKronosEllipticalMist(net.minecraft.client.gui.GuiGraphics guiGraphics, int width, int height, int maxAlpha, float strength)
+    {
+        final int color = 0x4E8FFF;
+        final int centerX = width / 2;
+        final int centerY = height / 2;
+
+        // 随强度从中心向外扩散：strength 越高，覆盖半径越大
+        final double outerRx = width * (0.25D + 0.85D * strength);
+        final double outerRy = height * (0.22D + 0.82D * strength);
+        final int bands = 18;
+
+        for (int i = 0; i < bands; i++)
+        {
+            double t0 = i / (double) bands;
+            double t1 = (i + 1) / (double) bands;
+
+            double innerRx = outerRx * t0;
+            double innerRy = outerRy * t0;
+            double outerBandRx = outerRx * t1;
+            double outerBandRy = outerRy * t1;
+
+            // 越靠边缘 alpha 越高，中间更浅
+            double edgeCurve = Math.pow(t1, 1.8D);
+            double edgeBoost = 0.42D * Math.pow(t1, 4.0D); // 让最外圈更深
+            int bandAlpha = (int) (maxAlpha * Math.min(1.0D, edgeCurve + edgeBoost));
+            if (bandAlpha <= 0)
+                continue;
+
+            drawEllipseRing(guiGraphics, centerX, centerY, innerRx, innerRy, outerBandRx, outerBandRy, (bandAlpha << 24) | color, width, height);
+        }
+    }
+
+    private static void drawEllipseRing(net.minecraft.client.gui.GuiGraphics guiGraphics,
+                                        int centerX,
+                                        int centerY,
+                                        double innerRx,
+                                        double innerRy,
+                                        double outerRx,
+                                        double outerRy,
+                                        int argb,
+                                        int width,
+                                        int height)
+    {
+        int yStart = Math.max(0, (int) Math.floor(centerY - outerRy));
+        int yEnd = Math.min(height - 1, (int) Math.ceil(centerY + outerRy));
+
+        for (int y = yStart; y <= yEnd; y++)
+        {
+            double dy = (y + 0.5D) - centerY;
+            double outerTerm = 1.0D - (dy * dy) / (outerRy * outerRy);
+            if (outerTerm <= 0.0D)
+                continue;
+
+            double outerDx = Math.sqrt(outerTerm) * outerRx;
+            int leftOuter = Math.max(0, (int) Math.floor(centerX - outerDx));
+            int rightOuter = Math.min(width, (int) Math.ceil(centerX + outerDx));
+            if (leftOuter >= rightOuter)
+                continue;
+
+            double innerDx = 0.0D;
+            if (innerRx > 0.0D && innerRy > 0.0D && Math.abs(dy) < innerRy)
+            {
+                double innerTerm = 1.0D - (dy * dy) / (innerRy * innerRy);
+                if (innerTerm > 0.0D)
+                    innerDx = Math.sqrt(innerTerm) * innerRx;
+            }
+
+            int leftInner = Math.max(0, (int) Math.floor(centerX - innerDx));
+            int rightInner = Math.min(width, (int) Math.ceil(centerX + innerDx));
+
+            // 左半环
+            if (leftOuter < leftInner)
+                guiGraphics.fill(leftOuter, y, leftInner, y + 1, argb);
+            // 右半环
+            if (rightInner < rightOuter)
+                guiGraphics.fill(rightInner, y, rightOuter, y + 1, argb);
         }
     }
 

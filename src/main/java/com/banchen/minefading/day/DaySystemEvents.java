@@ -130,6 +130,11 @@ public class DaySystemEvents
 
         DayStateData data = DayStateData.get(server);
         int worldDay = getWorldDay(overworld);
+
+        // 新世界且当前没有可用快照时，避免复用同名旧世界的外部 day_state 导致开局不是第一天。
+        if (!WorldRollbackManager.hasSnapshot(server))
+            data.resetForLikelyFreshWorld(worldDay);
+
         boolean dayChanged = data.updateForWorldDay(worldDay);
         int displayedDay = data.getDisplayedDay(worldDay);
         int remainingDays = Math.max(0, Config.countdownDays - displayedDay + 1);

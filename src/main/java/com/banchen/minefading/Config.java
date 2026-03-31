@@ -52,11 +52,6 @@ public class Config
             .comment("柯罗诺斯慢时的目标时间流速。0.05 表示时间以正常速度的 5% 流逝。1.0 表示不减速。")
             .defineInRange("kronosSpeedRatio", 0.05D, 0.01D, 1.0D);
 
-    // 柯罗诺斯慢时渐变步长（毫秒）
-    private static final ForgeConfigSpec.DoubleValue KRONOS_RAMP_STEP_MS = BUILDER
-            .comment("柯罗诺斯慢时每 tick 增减的延迟步长，单位毫秒。值越大，进入和退出慢时越快。")
-            .defineInRange("kronosRampStepMs", 50.0D, 0.1D, 5000.0D);
-
     // 吸入器最大耐久
     private static final ForgeConfigSpec.IntValue INHALER_DURABILITY = BUILDER
             .comment("吸入器的最大耐久。每次成功使用药芯消耗 1 点。")
@@ -79,7 +74,6 @@ public class Config
     public static int kronosTicks = 20 * 20;
     public static double kronosSpeedRatio = 0.25D;
     public static double kronosExtraWaitMaxMs = 950.0D; // 由 kronosSpeedRatio 换算
-    public static double kronosRampStepMs = 50.0D;
     public static int inhalerDurability = 30;
     public static String introduction;
 
@@ -95,7 +89,6 @@ public class Config
         kronosTicks = KRONOS_SECONDS.get() * 20;
         kronosSpeedRatio = KRONOS_SPEED_RATIO.get();
         kronosExtraWaitMaxMs = (50.0D / kronosSpeedRatio) - 50.0D;
-        kronosRampStepMs = KRONOS_RAMP_STEP_MS.get();
         inhalerDurability = INHALER_DURABILITY.get();
         introduction = INTRODUCTION.get();
     }
