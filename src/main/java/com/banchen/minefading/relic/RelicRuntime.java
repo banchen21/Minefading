@@ -50,10 +50,6 @@ public class RelicRuntime {
     private static final Map<UUID, Integer> causalityActiveTicks = new ConcurrentHashMap<>();
     // 因果刚刚成功救命后的保护窗口，防止客户端同 tick 误判死亡并触发回档
     private static final Map<UUID, Integer> causalityRecoveryTicks = new ConcurrentHashMap<>();
-    // 当前激活柯罗诺斯效果的玩家及其剩余 tick 数
-    private static final Map<UUID, Integer> kronosActiveTicks = new ConcurrentHashMap<>();
-    // 柯罗诺斯效果结束后是否需要再次存档的标志
-    private static final Map<UUID, Boolean> kronosNeedFinalizeSave = new ConcurrentHashMap<>();
     // 复活后需要切换为旁观者模式的玩家（极限死亡后锁定）
     private static final Set<UUID> pendingSpectatorLock = ConcurrentHashMap.newKeySet();
     // 已被锁定为旁观者、不得切换回其他模式的玩家
@@ -64,9 +60,6 @@ public class RelicRuntime {
     }
 
     private static volatile CandidateLocation causalityCandidate = null;
-
-    // 是否正在按下柯罗诺斯快捷键（客户端写入，客户端读取）
-    private static volatile boolean slowTimeKeyDown;
 
     // 根据药芯行为类型分发执行逻辑
     public static boolean handleAction(ServerPlayer player, RelicAction action) {
@@ -81,7 +74,7 @@ public class RelicRuntime {
             case TOWER -> killPlayer(player, "message.minefading.tower_selected");
             // 因果：需对生物定向使用，不响应空放
             case CAUSALITY -> false;
-            // 柯罗诺斯：按键放缓时间
+            // 柯罗诺斯：时缓核心已移除，仅保留存档行为
             case CHRONOS -> activateKronos(player);
         };
     }
@@ -159,21 +152,10 @@ public class RelicRuntime {
         return true;
     }
 
-    // 每客户端 tick 调用：倒计时效果、柯罗诺斯放缓时间、结束后存档
+    // 每服务端 tick 调用：驱动药芯持续效果
     public static void onServerTick(MinecraftServer server) {
         tickMap(causalityActiveTicks);
         tickMap(causalityRecoveryTicks);
-        tickMap(kronosActiveTicks);
-
-        // 柯罗诺斯效果结束后，为该玩家补存一次档
-        for (UUID playerId : kronosNeedFinalizeSave.keySet().toArray(UUID[]::new)) {
-            if (Boolean.TRUE.equals(kronosNeedFinalizeSave.get(playerId)) && !kronosActiveTicks.containsKey(playerId)) {
-                ServerPlayer player = server.getPlayerList().getPlayer(playerId);
-                if (player != null)
-                    createCheckpoint(player, "message.minefading.kronos_saved_after_end");
-                kronosNeedFinalizeSave.remove(playerId);
-            }
-        }
     }
 
     // 因果致死伤害拦截：若玩家激活了因果且存在符合条件的替身，
@@ -226,9 +208,7 @@ public class RelicRuntime {
     }
 
     public static void cancelKronosForRestore() {
-        slowTimeKeyDown = false;
-        kronosActiveTicks.clear();
-        kronosNeedFinalizeSave.clear();
+        // 时缓核心已移除，保留空实现以兼容现有调用点
     }
 
     private static void markEntityForTracking(LivingEntity entity, String markKey) {
@@ -309,28 +289,17 @@ public class RelicRuntime {
         player.setHealth(Math.min(player.getMaxHealth(), baseHealth + amount));
     }
 
-    // 由客户端 MinefadingKeybinds 每 tick 写入按键状态
     public static void setSlowTimeKeyDown(boolean keyDown) {
-        slowTimeKeyDown = keyDown;
+        // 时缓核心已移除，保留空实现以兼容现有调用点
     }
 
-    // 当前是否处于“柯罗诺斯减 tick 流速”状态（按键按下且已激活柯罗诺斯）
     public static boolean isKronosSlowActive() {
-        return slowTimeKeyDown && !kronosActiveTicks.isEmpty();
+        return false;
     }
 
     private static boolean activateKronos(ServerPlayer player) {
-        if (!kronosActiveTicks.isEmpty()) {
-            player.displayClientMessage(Component.translatable("message.minefading.kronos_already_active"), true);
-            return false;
-        }
-
+        // 时缓核心已移除：柯罗诺斯仅保留“立即存档”语义
         createCheckpoint(player, "message.minefading.kronos_saved_before_start", true);
-        kronosActiveTicks.put(player.getUUID(), Config.kronosTicks);
-        kronosNeedFinalizeSave.put(player.getUUID(), true);
-        player.addEffect(
-                new MobEffectInstance(ModEffects.KRONOS_ACTIVE.get(), Config.kronosTicks, 0, false, true, true));
-        player.displayClientMessage(Component.translatable("message.minefading.kronos_hold_key"), true);
         return true;
     }
 

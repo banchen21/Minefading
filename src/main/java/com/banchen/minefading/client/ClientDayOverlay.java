@@ -5,7 +5,6 @@ import com.banchen.minefading.Minefading;
 import com.banchen.minefading.WorldRollbackManager;
 import com.banchen.minefading.day.DayMode;
 import com.banchen.minefading.day.DayStateData;
-import com.banchen.minefading.relic.RelicGameplayEvents;
 import com.banchen.minefading.relic.RelicRuntime;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
@@ -119,7 +118,7 @@ public class ClientDayOverlay
         }
 
         // 时缓朦胧层：客户端侧平滑渐变进入/退出
-        float targetAlpha = (float) RelicGameplayEvents.getKronosSlowFactor();
+        float targetAlpha = (float) KronosSlowController.getOverlayStrength();
         float lerpSpeed = 0.05F; // 每帧插值步长，越小越平滑
         if (kronosOverlayAlpha < targetAlpha)
             kronosOverlayAlpha = Math.min(targetAlpha, kronosOverlayAlpha + lerpSpeed);

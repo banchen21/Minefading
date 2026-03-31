@@ -66,6 +66,27 @@ description='''${mod_description}'''
     ordering="NONE"
     side="BOTH"
 
+# 时之钟 - 强制前置（生产和开发环境都必须）
+[[dependencies.minefading]]
+    modId="timeclock"
+    mandatory=true
+    versionRange="[4.4.0,)"
+    side="CLIENT"
+
+# 时之钟前置：布料配置库
+[[dependencies.minefading]]
+    modId="cloth_config"
+    mandatory=false
+    versionRange="[11.1,)"
+    side="BOTH"
+
+# 时之钟前置：又一个配置库
+[[dependencies.minefading]]
+    modId="yet_another_config_lib_v3"
+    mandatory=false
+    versionRange="[3.6,)"
+    side="BOTH"
+
 # Features are specific properties of the game environment that your mod may require.
 # The sample below shows how to request GL version 3.2 or higher. Features are side aware,
 # so declaring one here will not block dedicated server startup unless the feature is required there.
