@@ -2,6 +2,7 @@ package com.banchen.minefading.client;
 
 import com.banchen.minefading.Config;
 import com.banchen.minefading.Minefading;
+import com.banchen.minefading.effect.ModEffects;
 import net.minecraft.client.Minecraft;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.commands.CommandSourceStack;
@@ -30,20 +31,31 @@ public class KronosSlowController
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.player == null)
         {
+            if (slowActive)
+                restoreNormalTickrate(minecraft);
             lastKeyDown = false;
             slowActive = false;
             return;
         }
 
         boolean keyDown = MinefadingKeybinds.KRONOS_SLOW_KEY.isDown();
-        if (keyDown == lastKeyDown)
+        boolean kronosActive = minecraft.player.hasEffect(ModEffects.KRONOS_ACTIVE.get());
+
+        // 没有柯罗诺斯状态时，任何按键都不允许触发时缓，并且立即恢复默认 tickrate。
+        if (!kronosActive)
+        {
+            if (slowActive)
+                restoreNormalTickrate(minecraft);
+            lastKeyDown = keyDown;
             return;
+        }
+
+        if (keyDown && !lastKeyDown)
+            applySlow(minecraft);
+        else if (!keyDown && lastKeyDown)
+            restoreNormalTickrate(minecraft);
 
         lastKeyDown = keyDown;
-        if (keyDown)
-            applySlow(minecraft);
-        else
-            restoreNormalTickrate(minecraft);
     }
 
     private static void applySlow(Minecraft minecraft)
