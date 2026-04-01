@@ -14,8 +14,10 @@ import net.minecraftforge.fml.common.Mod;
 @Mod.EventBusSubscriber(modid = Minefading.MODID, value = Dist.CLIENT)
 public class KronosSlowController
 {
-    private static boolean lastKeyDown;
+    // tickrate 过低会导致“取消指令也被慢速执行”，体感上再次按键会明显迟滞。
+    private static final int RESPONSIVE_MIN_TICKRATE = 6;
     private static boolean slowActive;
+    private static int pendingRestoreTicks;
 
     public static double getOverlayStrength()
     {
@@ -33,12 +35,10 @@ public class KronosSlowController
         {
             if (slowActive)
                 restoreNormalTickrate(minecraft);
-            lastKeyDown = false;
             slowActive = false;
             return;
         }
 
-        boolean keyDown = MinefadingKeybinds.KRONOS_SLOW_KEY.isDown();
         boolean kronosActive = minecraft.player.hasEffect(ModEffects.KRONOS_ACTIVE.get());
 
         // 没有柯罗诺斯状态时，任何按键都不允许触发时缓，并且立即恢复默认 tickrate。
@@ -46,21 +46,32 @@ public class KronosSlowController
         {
             if (slowActive)
                 restoreNormalTickrate(minecraft);
-            lastKeyDown = keyDown;
+            pendingRestoreTicks = 0;
             return;
         }
 
-        if (keyDown && !lastKeyDown)
-            applySlow(minecraft);
-        else if (!keyDown && lastKeyDown)
-            restoreNormalTickrate(minecraft);
+        if (MinefadingKeybinds.KRONOS_SLOW_KEY.consumeClick())
+        {
+            if (slowActive)
+                restoreNormalTickrate(minecraft);
+            else
+                applySlow(minecraft);
+        }
 
-        lastKeyDown = keyDown;
+        if (!slowActive && pendingRestoreTicks > 0)
+        {
+            executeTimeclockCommands(minecraft,
+                    "timeclock tickrate 20",
+                    "timeclock pauseTime false");
+            pendingRestoreTicks--;
+        }
     }
 
     private static void applySlow(Minecraft minecraft)
     {
-        int targetTickrate = Math.max(1, Math.min(20, (int) Math.round(20.0D * Config.kronosSpeedRatio)));
+        pendingRestoreTicks = 0;
+        int configuredTickrate = Math.max(1, Math.min(20, (int) Math.round(20.0D * Config.kronosSpeedRatio)));
+        int targetTickrate = Math.max(RESPONSIVE_MIN_TICKRATE, configuredTickrate);
         executeTimeclockCommands(minecraft,
                 "timeclock pauseTime false",
                 "timeclock tickrate " + targetTickrate);
@@ -69,10 +80,12 @@ public class KronosSlowController
 
     private static void restoreNormalTickrate(Minecraft minecraft)
     {
+        // 先本地清状态，确保取消体感立即生效。
+        slowActive = false;
+        pendingRestoreTicks = 2;
         executeTimeclockCommands(minecraft,
                 "timeclock tickrate 20",
                 "timeclock pauseTime false");
-        slowActive = false;
     }
 
     private static void executeTimeclockCommands(Minecraft minecraft, String... commands)

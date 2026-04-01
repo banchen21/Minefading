@@ -119,11 +119,13 @@ public class ClientDayOverlay
 
         // 时缓朦胧层：客户端侧平滑渐变进入/退出
         float targetAlpha = (float) KronosSlowController.getOverlayStrength();
-        float lerpSpeed = 0.05F; // 每帧插值步长，越小越平滑
-        if (kronosOverlayAlpha < targetAlpha)
-            kronosOverlayAlpha = Math.min(targetAlpha, kronosOverlayAlpha + lerpSpeed);
+        float fadeInSpeed = 0.06F;
+        if (targetAlpha <= 0.001F)
+            kronosOverlayAlpha = 0.0F;
+        else if (kronosOverlayAlpha < targetAlpha)
+            kronosOverlayAlpha = Math.min(targetAlpha, kronosOverlayAlpha + fadeInSpeed);
         else if (kronosOverlayAlpha > targetAlpha)
-            kronosOverlayAlpha = Math.max(targetAlpha, kronosOverlayAlpha - lerpSpeed);
+            kronosOverlayAlpha = targetAlpha;
 
         if (kronosOverlayAlpha > 0.001F)
         {
